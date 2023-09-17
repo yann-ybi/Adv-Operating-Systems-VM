@@ -180,7 +180,7 @@ void retrieveRunningDomainInfo(virConnectPtr conn, int domainCount, virDomainPtr
             printf("Failed to get vcpu info for domain # %ld\n", k);
         }
 
-        domainPerformanceData[k].cpuUsagePercentage = virtualCPUInfo->cpuelapsedTime;
+        domainPerformanceData[k].cpuUsagePercentage = virtualCPUInfo->cpuTime;
         domainPerformanceData[k].previousAssignedPhysicalCPU = virtualCPUInfo->cpu;
 
         free(virtualCPUInfo);
