@@ -11,20 +11,16 @@
 
 int is_exit = 0; // DO NOT MODIFY THE VARIABLE
 
-// Main scheduler to distribute memory across all active domains in the system at regular intervals.
-void MemoryScheduler(virConnectPtr conn, int interval);
+struct domainMemUsage{
+	unsigned long long actual;
+	unsigned long long unused;
+	int memDemandingBool;
+	int memFreeCount;
+};
 
-//  Gathers the memory usage statistics for a single domain
-void GatherDomainMemoryStats(virDomainPtr domain, struct domainMemUsage* memoryUsage);
+struct domainMemUsage *prevUsage = NULL;
 
-// Analyzes the memory demand for a domain based on its current and previous memory usage
-void AnalyzeDomainMemoryDemand(struct domainMemUsage* currentUsage, struct domainMemUsage* previousUsage, long* memoryChangeRate, int* needsMoreMemory, int* isIdle, long minMemoryWorkload, long unusedMemoryThreshold);
-
-// Reclaims memory from domains that have excess unused memory
-void HandleMemoryReclaimation(virDomainPtr domain, struct domainMemUsage* memoryUsage, int memoryStep, long minimumActualMemory, long minimumUnusedMemory);
-
-// Allocates additional memory to domains that require it, based on available host memory
-void AllocateMemoryToDomains(virDomainPtr* domains, struct domainMemUsage* memoryUsages, int domainCount, int* needsMoreMemoryFlags, long hostMinMemory, int memoryStep, long maxAllowedMemory);
+void MemoryScheduler(virConnectPtr conn,int interval);
 
 /*
 DO NOT CHANGE THE FOLLOWING FUNCTION
@@ -50,7 +46,7 @@ int main(int argc, char *argv[])
 
 	// Gets the interval passes as a command line argument and sets it as the STATS_PERIOD for collection of balloon memory statistics of the domains
 	int interval = atoi(argv[1]);
-	
+
 	conn = virConnectOpen("qemu:///system");
 	if(conn == NULL)
 	{
@@ -72,123 +68,232 @@ int main(int argc, char *argv[])
 	return 0;
 }
 
-void GatherDomainMemoryStats(virDomainPtr domain, struct domainMemUsage* memoryUsage) {
-    virDomainMemoryStatStruct stats[VIR_DOMAIN_MEMORY_STAT_NR];
-    unsigned int numStats = virDomainMemoryStats(domain, stats, VIR_DOMAIN_MEMORY_STAT_NR, 0);
-
-    if (numStats  == -1) {
-        printf("Error getting memory stats for domain.\n");
-        return;
-    }
-
-    for (size_t k = 0; k < numStats ; k++) {
-        if (stats[k].tag == VIR_DOMAIN_MEMORY_STAT_UNUSED) {
-            memoryUsage->unused = stats[k].val / 1024;
-        }
-        if (stats[k].tag == VIR_DOMAIN_MEMORY_STAT_ACTUAL_BALLOON) {
-            memoryUsage->actual = stats[k].val / 1024;
-        }
-    }
-}
-
-void AnalyzeDomainMemoryDemand(struct domainMemUsage* currentUsage, struct domainMemUsage* previousUsage, long* memoryChangeRate, int* needsMoreMemory, int* isIdle, long minMemoryWorkload, long unusedMemoryThreshold) {
-    long changeInUnused = (previousUsage->unused - currentUsage->unused);
-    long changeInActual = (previousUsage->actual - currentUsage->actual);
-
-    if ((changeInUnused > 5 && changeInActual == 0) || (changeInActual < 0 && previousUsage->memDemandingBool)) {
-        currentUsage->memDemandingBool = 1;
-        *memoryChangeRate = changeInUnused;
-        if (currentUsage->unused < minMemoryWorkload) {
-            *needsMoreMemory = 1;
-        }
-    }
-
-    if (currentUsage->unused > unusedMemoryThreshold && previousUsage->unused > unusedMemoryThreshold && changeInUnused < 5) {
-        currentUsage->memFreeCount = previousUsage->memFreeCount + 1;
-        if (currentUsage->memFreeCount == 3) {
-            *isIdle = 1;
-            currentUsage->memFreeCount = 0;
-        }
-    } else {
-        currentUsage->memFreeCount = 0;
-    }
-}
-
-void HandleMemoryReclaimation(virDomainPtr domain, struct domainMemUsage* memoryUsage, int memoryStep, long minimumActualMemory, long minimumUnusedMemory) {
-    if (memoryUsage->memDemandingBool == 0 && memoryUsage->actual > minimumActualMemory && memoryUsage->unused > minimumUnusedMemory) {
-        int memDecrement = MIN(memoryStep, memoryUsage->unused - minimumUnusedMemory);
-        if (virDomainSetMemory(domain, MAX((memoryUsage->actual - memDecrement), minimumActualMemory) * 1024) == -1) {
-            printf("Failed to reclaim memory from domain.\n");
-        }
-    }
-}
-
-void AllocateMemoryToDomains(virDomainPtr* domains, struct domainMemUsage* memoryUsages, int domainCount, int* needsMoreMemoryFlags, long hostMinMemory, int memoryStep, long maxAllowedMemory) {
-    long memAvailableTotal = (virNodeGetFreeMemory(domains[0]) / 1024) / 1024; // Convert to MB
-    if (memAvailableTotal > hostMinMemory) {
-        unsigned long long memPartition = (memAvailableTotal - hostMinMemory) / domainCount;
-        memPartition = MIN(memPartition, memoryStep);
-        for (size_t i = 0; i < domainCount; i++) {
-            if (needsMoreMemoryFlags[i] && memoryUsages[i].actual <= maxAllowedMemory) {
-                if (virDomainSetMemory(domains[i], MIN(memoryUsages[i].actual + memPartition, maxAllowedMemory) * 1024) == -1) {
-                    printf("Failed to allocate memory to domain[%ld].\n", i);
-                }
-            }
-        }
-    }
-}
-
 /*
 COMPLETE THE IMPLEMENTATION
 */
-void MemoryScheduler(virConnectPtr conn, int interval) {
-    int memoryStep = 100, minimumActualMemory = 200, unusedMemoryThreshold = 400, minMemoryWorkload = 2 * 100, maxAllowedMemory = 2048, hostMinMemory = 200;
-    virDomainPtr* domains;
-    unsigned int domainFilterFlags = VIR_CONNECT_LIST_DOMAINS_RUNNING;
-    int domainCount = virConnectListAllDomains(conn, &domains, domainFilterFlags);
+void MemoryScheduler(virConnectPtr conn, int interval)
+{
 
-    if (domainCount < 0) {
-        printf("Failed to get list of domains.\n");
-        return;
-    }
+	int statPeriod = interval;
+	int memoryIncrement = 100;	 // MB
+	long unusedMin = 100;		 // MB
+	long actualMin = 200;		 // MB
+	long maxMem = 2048;			 // MB
+	long hostMin = 200;			 // MB
+	long unusedThreadhold = 400; // MB
+	long memMinWork = unusedMin *2; // MB
 
-    struct domainMemUsage* currUsage = calloc(sizeof(struct domainMemUsage), domainCount);
-    int needMoreMemoryFlags[domainCount], isIdle[domainCount];
-    long memoryChangeRate[domainCount];
+	// get list of domain
+	virDomainPtr *domainList;
+	unsigned int flags = VIR_CONNECT_LIST_DOMAINS_RUNNING;
 
-    for (size_t i = 0; i < domainCount; i++) {
-        virDomainSetMemoryStatsPeriod(domains[i], interval, VIR_DOMAIN_AFFECT_LIVE);
-        GatherDomainMemoryStats(domains[i], &currUsage[i]);
+	int nDomain = virConnectListAllDomains(conn, &domainList, flags); // return the list of running domains
 
-        needMoreMemoryFlags[i] = 0;
-        memoryChangeRate[i] = 0;
-        isIdle[i] = 0;
-        currUsage[i].memDemandingBool = 0;
+	if (nDomain < 0)
+	{
+		printf("Failed to get list of domains.\n");
+		return;
+	}
 
-        if (prevUsage) {
-            AnalyzeDomainMemoryDemand(&currUsage[i], &prevUsage[i], &memoryChangeRate[i], &needMoreMemoryFlags[i], &isIdle[i], minMemoryWorkload, unusedMemoryThreshold);
-        }
+	struct domainMemUsage *memUsage = calloc(sizeof(struct domainMemUsage), nDomain);
 
-        if (isIdle[i] && currUsage[i].actual > minimumActualMemory) {
-            HandleMemoryReclaimation(domains[i], &currUsage[i], memoryStep, minimumActualMemory, 100);
-        }
-    }
+	for (size_t i = 0; i < nDomain; i++)
+	{
+		// Set Stat Period
+		if (virDomainSetMemoryStatsPeriod(domainList[i], statPeriod, VIR_DOMAIN_AFFECT_LIVE) == -1)
+		{
+			printf("Failed to set stats period for domain[%ld].\n", i);
+		}
 
-    if (prevUsage) {
-        int domainCountNeedMem = 0;
-        for (size_t i = 0; i < domainCount; i++) {
-            domainCountNeedMem += needMoreMemoryFlags[i];
-        }
+		virDomainMemoryStatStruct stats[VIR_DOMAIN_MEMORY_STAT_NR];
+		unsigned int nr_stats;
+		nr_stats = virDomainMemoryStats(domainList[i], stats, VIR_DOMAIN_MEMORY_STAT_NR, 0);
+		if (nr_stats == -1)
+		{
+			printf("Error getting memory stats for domain[%ld].\n", i);
+		}
 
-        if (domainCountNeedMem) {
-            HandleMemoryReclaimation(domains[domainCountNeedMem], &currUsage[domainCountNeedMem], memoryStep, minimumActualMemory, 100);
-            AllocateMemoryToDomains(domains, currUsage, domainCount, needMoreMemoryFlags, hostMinMemory, memoryStep, maxAllowedMemory);
-        }
-    } else {
-        prevUsage = currUsage;
-        return;
-    }
+		// printf("Domain[%ld] -->",i);
+		for (size_t j = 0; j < nr_stats; j++)
+		{
+			if (stats[j].tag == VIR_DOMAIN_MEMORY_STAT_UNUSED)
+			{
+				(memUsage + i)->unused = stats[j].val / 1024;
+				// printf("unused %llu--", (memUsage+i)->unused);
+			}
 
-    free(prevUsage);
-    prevUsage = currUsage;
+			if (stats[j].tag == VIR_DOMAIN_MEMORY_STAT_ACTUAL_BALLOON)
+			{
+				(memUsage + i)->actual = stats[j].val / 1024;
+				// printf("actual %llu--", (memUsage+i)->actual);
+			}
+		}
+	}
+
+	if (prevUsage == NULL)
+	{
+
+		for (size_t i = 0; i < nDomain; i++)
+		{
+			(memUsage + i)->memDemandingBool = 0;
+			(memUsage+i)->memFreeCount = 0;
+		}
+
+		prevUsage = memUsage;
+		memUsage = NULL;
+
+		// printf("return from prevUsage\n");
+		// printf("\n");
+		return;
+	}
+
+	// printf("Continue with current usage\n");
+	int needMemoryBoolean[nDomain];
+	long memoryConsumptionRate[nDomain];
+	int idleDomain[nDomain];
+
+	for (size_t i = 0; i < nDomain; i++)
+	{
+		needMemoryBoolean[i] = 0;
+		memoryConsumptionRate[i] = 0;
+		idleDomain[i] = 0;
+		(memUsage + i)->memDemandingBool = 0;
+	}
+
+	for (size_t i = 0; i < nDomain; i++)
+	{
+
+		printf("Domain[%ld]---prev: actual[%llu]/unused[%llu]---curr: actual[%llu]/unused[%llu]\n", i, (prevUsage + i)->actual, (prevUsage + i)->unused, (memUsage + i)->actual, (memUsage + i)->unused);
+		// Determine if domain is demanding memory
+		long dUnused = ((prevUsage + i)->unused - (memUsage + i)->unused) / 1;
+		long dActual = ((prevUsage + i)->actual - (memUsage + i)->actual) / 1;
+
+		if ((dUnused > 5 && dActual == 0) || (dActual < 0 && (prevUsage + i)->memDemandingBool == 1))
+		{
+			(memUsage + i)->memDemandingBool = 1;
+			memoryConsumptionRate[i] = dUnused; // Save current consumption rate
+			printf("Domain[%ld] is demanding memory\n", i);
+
+			// printf("Delta usage for domain[%ld]: %llu --->",i,deltaUsage);
+			if (memUsage[i].unused < memMinWork)
+			{
+				needMemoryBoolean[i] = 1;
+				// printf("Domain[%ld] needs memory\n",i);
+			}
+		}
+
+		// Determine if domain's process releasing memory
+		if ((memUsage + i)->unused > unusedThreadhold && (prevUsage + i)->unused > unusedThreadhold && dUnused < 5)
+		{
+			(memUsage + i)->memFreeCount = (prevUsage + i)->memFreeCount + 1;
+			if ((memUsage + i)->memFreeCount == 3)
+			{
+				//set flag to reclaimed memory
+				idleDomain[i] = 1;
+
+				//reset count
+				(memUsage + i)->memFreeCount = 0;
+
+				printf("Domain[%ld] is releasing memory\n", i);
+			}
+		}
+		else
+		{
+			(memUsage + i)->memFreeCount = 0;
+		}
+	}
+
+	// check if there is domain releasing mem
+	int idleDomainTotal = 0;
+	for (size_t i = 0; i < nDomain; i++)
+	{
+		idleDomainTotal += idleDomain[i];
+	}
+
+	if (idleDomainTotal > 0)
+	{
+		for (size_t i = 0; i < nDomain; i++)
+		{
+			if (idleDomain[i] == 1 && memUsage[i].actual > actualMin)
+			{
+				int memDecrement = MIN(memoryIncrement, memUsage[i].unused - unusedMin);
+				if (virDomainSetMemory(domainList[i], MAX(memUsage[i].actual - memDecrement, actualMin) * 1024) == -1)
+				{
+					printf("Failed to reclaimed memory from domain[%ld].\n", i);
+				}
+				else
+				{
+					printf("Reclaimed from idle memory domain[%ld]\n", i);
+				}
+			}
+		}
+	}
+
+	// check if there is a need for memory
+	int nDomainNeedMem = 0;
+	for (size_t i = 0; i < nDomain; i++)
+	{
+		nDomainNeedMem += needMemoryBoolean[i];
+	}
+
+	if (nDomainNeedMem > 0)
+	{
+		// reclaiming memory
+		// unsigned long long memReclaimedRate[nDomain];
+		// get Host Free Memory
+
+		for (size_t i = 0; i < nDomain; i++)
+		{
+			if (memUsage[i].memDemandingBool == 0 && prevUsage[i].memDemandingBool == 0 && memUsage[i].actual > actualMin && memUsage[i].unused > unusedMin)
+			{
+				int memDecrement = MIN(memoryIncrement, memUsage[i].unused - unusedMin);
+				if (virDomainSetMemory(domainList[i], MAX((memUsage[i].actual - memDecrement), actualMin) * 1024) == -1)
+				{
+					printf("Failed to reclaimed memory from domain[%ld].\n", i);
+				}
+			}
+		}
+
+		long memAvailableTotal = (virNodeGetFreeMemory(conn) / 1024) / 1024; // Convert to MB
+
+
+		if (memAvailableTotal > hostMin)
+		{
+			// Check partition vs need vs max host
+			unsigned long long memPartition = (memAvailableTotal - hostMin) / nDomainNeedMem;
+
+			printf("Host Memory[%lu] --- MemToAllocate[%ld]\n", memAvailableTotal, (memAvailableTotal - hostMin));
+
+			long maxConsumption = 0;
+			for (size_t i = 0; i < nDomain; i++)
+			{
+
+				maxConsumption = MAX(maxConsumption,memoryConsumptionRate[i]);
+				//printf("Max Consumption [%ld] vs Current Consumption [%ld]\n", maxConsumption, memoryConsumptionRate[i]);
+			}
+
+			memoryIncrement = MAX(memoryIncrement,1.5*maxConsumption);
+
+			//printf("Memory Increment: %d\n", memoryIncrement);
+
+			memPartition = MIN(memPartition, memoryIncrement);
+
+			//printf("Memory Partition: %lld\n", memPartition);
+
+			for (size_t i = 0; i < nDomain; i++)
+			{
+				if (needMemoryBoolean[i] == 1 && memUsage[i].actual <= maxMem)
+				{
+					if (virDomainSetMemory(domainList[i], MIN(memUsage[i].actual + memPartition, maxMem) * 1024) == -1)
+					{
+						printf("Failed to allocated memory from domain[%ld].\n", i);
+					}
+				}
+			}
+		}
+	}
+	free(prevUsage);
+	prevUsage = memUsage;
+	memUsage = NULL;
+	printf("\n");
 }

@@ -11,39 +11,23 @@
 
 int is_exit = 0; // DO NOT MODIFY THIS VARIABLE
 
-double *previousDomainCPUUsage = NULL;
 
-struct DomainPerformance 
+double *domainPreviousUsage = NULL;
+
+struct DomainLoad
 {
-    int currDomainIndex;
-    float cpuUsagePercentage;
-    int assignedPhysicalCPU;
-    int previousAssignedPhysicalCPU;
+	int index;
+	float usage;
+	int pcpuIndex;
+	int pcpuPrevIndex;
 };
 
-// Function to compare two domain loads. Returns a negative number, zero, or a positive number.
-int compareDomainPerformance(const void *a, const void *b);
+//Helper functions used to compare and sort domainLoad structures
+int cmp(const void *a, const void *b);
+int min(const void *a,int size);
 
-// Function to find the index of the minimum value in an array of doubles
-int findMinIndex(double *array, int size);
 
-// Handler for the signal; updates the global 'is_exit' flag
-void signalHandler();
-
-// Schedules the CPU, checking CPU usage and setting pins at regular intervals
-void CPUScheduler(virConnectPtr conn, int interval);
-
-// Gathers information about the host, like the number of pCPUs
-void getHostCPUInfo(virConnectPtr conn, int *numberOfPhysicalCPUs);
-
-// Gathers information about each running domain and updates the domainLoad structures
-void retrieveRunningDomainInfo(virConnectPtr conn, int domainCount, virDomainPtr *domains, struct DomainPerformance *domainPerformanceData, int numberOfPhysicalCPUs);
-
-// Calculates CPU utilization for domains and for each physical CPU
-void computeCPUUtilization(struct DomainPerformance *domainPerformanceData, double *currentDomainUsage, double elapsedTime, int domainCount, double *physicalCPUUtilization);
-
-// Pins domains to specific CPUs based on the domain loads
-void assigdomainCountsToCPUs(virDomainPtr *domains, struct DomainPerformance *domainPerformanceData, int domainCount, int numberOfPhysicalCPUs);
+void CPUScheduler(virConnectPtr conn,int interval);
 
 /*
 DO NOT CHANGE THE FOLLOWING FUNCTION
@@ -69,7 +53,7 @@ int main(int argc, char *argv[])
 
 	// Gets the interval passes as a command line argument and sets it as the STATS_PERIOD for collection of balloon memory statistics of the domains
 	int interval = atoi(argv[1]);
-	
+
 	conn = virConnectOpen("qemu:///system");
 	if(conn == NULL)
 	{
@@ -92,168 +76,210 @@ int main(int argc, char *argv[])
 	return 0;
 }
 
-void signalHandler() {
-    printf("Caught Signal");
-    is_exit = 1;
-}
-
 /* COMPLETE THE IMPLEMENTATION */
-void CPUScheduler(virConnectPtr conn, int interval) {
+void CPUScheduler(virConnectPtr conn, int interval)
+{
+	double time = interval * pow(10, 9);
+	// first get host info
+	virNodeInfo host;
+	if (virNodeGetInfo(conn, &host) == -1)
+	{
+		printf("Failed to get host info\n");
+	}
 
-    double elapsedTime = interval * pow(10, 9);
-    int numberOfPhysicalCPUs;
-    getHostCPUInfo(conn, &numberOfPhysicalCPUs);
+	int npcpu = VIR_NODEINFO_MAXCPUS(host); // number of physical cpu
+	printf("Number of PCPU using virNodGetInfo: %d\n", npcpu);
 
-    virDomainPtr *domains;
-    unsigned int flags = VIR_CONNECT_LIST_DOMAINS_RUNNING;
-    int domainCount = virConnectListAllDomains(conn, &domains, flags);
-    if (domainCount < 0) {
-        printf("Failed to get list of domains.\n");
-        return;
-    }
+	// get list of domain
+	virDomainPtr *domainList;
+	unsigned int flags = VIR_CONNECT_LIST_DOMAINS_RUNNING;
 
-    double *currentDomainUsage = calloc(domainCount, sizeof(double));
-    struct DomainPerformance *domainPerformanceData = calloc(domainCount, sizeof(struct DomainPerformance));
+	int nDomain = virConnectListAllDomains(conn, &domainList, flags); // return the list of running domains
 
-    retrieveRunningDomainInfo(conn, domainCount, domains, domainPerformanceData, numberOfPhysicalCPUs);
+	if (nDomain < 0)
+	{
+		printf("Failed to get list of domains.\n");
+		return;
+	}
 
-    if (previousDomainCPUUsage == NULL) {
-        previousDomainCPUUsage = currentDomainUsage;
-        free(domains);
-        free(domainPerformanceData);
-        return;
-    }
+	// Getting start time interval usage
+	double *domainUsage = calloc(sizeof(double), nDomain);
+	struct DomainLoad *domainLoadPtr = calloc(sizeof(struct DomainLoad), nDomain);
 
-    double *physicalCPUUtilization = calloc(numberOfPhysicalCPUs, sizeof(double));
-    computeCPUUtilization(domainPerformanceData, currentDomainUsage, elapsedTime, domainCount, physicalCPUUtilization);
-    
-    double sum = 0.0, mean = 0.0, SD = 0.0;
-    for (int k = 0; k < numberOfPhysicalCPUs; ++k) {
-        sum += physicalCPUUtilization[k];
-    }
-    mean = sum / numberOfPhysicalCPUs;
-    for (int k = 0; k < numberOfPhysicalCPUs; ++k) {
-        SD += pow(physicalCPUUtilization[k] - mean, 2);
-    }
-    SD = sqrt(SD / numberOfPhysicalCPUs);
-    printf("Standard Deviation: %f\n", SD);
+	for (size_t i = 0; i < nDomain; i++)
+	{
+		// get domain info
+		virDomainInfo domainInfo;
+		if (virDomainGetInfo(domainList[i], &domainInfo) == -1)
+		{
+			printf("Failed to get domain info for domain # %ld\n", i);
+		}
 
-    if (SD > 5) {
-        assigdomainCountsToCPUs(domains, domainPerformanceData, domainCount, numberOfPhysicalCPUs);
-    }
+		int nvcpu = domainInfo.nrVirtCpu;
+		// printf("Domain %ld has %d vcpu.\n",i,nvcpu);
 
-    free(physicalCPUUtilization);
-    free(domainPerformanceData);
-    free(previousDomainCPUUsage);
-    free(domains);
-    previousDomainCPUUsage = currentDomainUsage;
+		int maplen = VIR_CPU_MAPLEN(npcpu);
+		unsigned char *cpumap = calloc(nvcpu, maplen);
+		virVcpuInfoPtr vcpuInfo = malloc(sizeof(virVcpuInfo) * nvcpu);
+		if (virDomainGetVcpus(domainList[i], vcpuInfo, nvcpu, cpumap, maplen) == -1)
+		{
+			printf("Failed to get vcpu info for domain # %ld\n", i);
+		}
+
+		// Print statement testing return from virDomainGetVcpus()
+		// printf("Domain[%ld] Time used by VCPU: [%lld] ---> PCPU: [%d]\n",i,(vcpuInfo->cpuTime),vcpuInfo->cpu);
+		// printf("CPUMAP for VCPU[%d]: %x\n",vcpuInfo->number,*cpumap);
+
+		domainUsage[i] = (vcpuInfo->cpuTime);
+		(domainLoadPtr + i)->pcpuPrevIndex = vcpuInfo->cpu;
+
+		free(vcpuInfo);
+		free(cpumap);
+	}
+
+	// intialize domainPreviousUsage
+	if (domainPreviousUsage == NULL)
+	{
+		// printf("first iteration with no prior usage info\n");
+		domainPreviousUsage = domainUsage;
+		domainUsage = NULL;
+
+		for (size_t i = 0; i < nDomain; i++)
+		{
+			virDomainFree(domainList[i]);
+		}
+
+		free(domainList);
+		free(domainLoadPtr);
+		return;
+	}
+
+	double *pcpusUtilization = calloc(sizeof(double), npcpu);
+
+	for (size_t i = 0; i < nDomain; i++)
+	{
+		(domainLoadPtr + i)->usage = (domainUsage[i] - domainPreviousUsage[i]) * 100 / time;
+		(domainLoadPtr + i)->index = i;
+		// printf("CPU Usage for domain[%d] is: %f.\n", (domainLoadPtr + i)->index, (domainLoadPtr + i)->usage);
+		pcpusUtilization[(domainLoadPtr + i)->pcpuPrevIndex] += (domainLoadPtr + i)->usage;
+	}
+
+	for (size_t i = 0; i < npcpu; i++)
+	{
+		printf("PCPU[%ld] utilzation: %f\n", i, pcpusUtilization[i]);
+	}
+
+	// Calculate standard deviation
+	double sum = 0.0, mean = 0.0, SD = 0.0;
+	int i;
+	for (i = 0; i < npcpu; ++i)
+	{
+		sum += pcpusUtilization[i];
+	}
+	mean = sum / npcpu;
+	for (i = 0; i < npcpu; ++i)
+	{
+		SD += pow(pcpusUtilization[i] - mean, 2);
+	}
+	SD = sqrt(SD / npcpu);
+	printf("Standard Deviation: %f\n", SD);
+
+	// pin VCPU to PCPU if StdD is higher than 5%
+	if (SD > 5)
+	{
+
+		// Sort in descending order of load
+		qsort(domainLoadPtr, nDomain, sizeof(struct DomainLoad), cmp);
+
+		// Print statement testing sorting
+		/* printf("Sorted CPU for each domain\n");
+
+		for (size_t i = 0; i < nDomain; i++)
+		{
+			printf("CPU Usage for domain[%d] is: %f.\n", (domainLoadPtr + i)->index, (domainLoadPtr + i)->usage);
+		} */
+
+		double *bucketArray = calloc(sizeof(double), npcpu);
+		for (size_t i = 0; i < nDomain; i++)
+		{
+			int smallestBucketIndex = min(bucketArray, npcpu);
+			*(bucketArray + smallestBucketIndex) += (domainLoadPtr + i)->usage;
+			// printf("Domain[%d] is pinned to PCPU[%d]\n", (domainLoadPtr + i)->index, smallestBucketIndex + 1);
+			(domainLoadPtr + i)->pcpuIndex = smallestBucketIndex;
+		}
+
+		for (size_t i = 0; i < npcpu; i++)
+		{
+			printf("PCPU[%ld] Estimated Utilization: %f\n", i + 1, *(bucketArray + i));
+		}
+
+		// Pin VCPU to CPU
+		for (size_t i = 0; i < nDomain; i++)
+		{
+			// get index for domainList, pcpu number from domainLoadPtr struct
+			int domainIndex = (domainLoadPtr + i)->index;
+			int pinPcpu = (domainLoadPtr + i)->pcpuIndex;
+
+			// get domain info
+			virDomainInfo domainInfo;
+			if (virDomainGetInfo(domainList[domainIndex], &domainInfo) == -1)
+			{
+				printf("Failed to get domain info for domain # %d\n", domainIndex);
+			}
+
+			int nvcpu = domainInfo.nrVirtCpu;
+
+			int maplen = VIR_CPU_MAPLEN(npcpu);
+			unsigned char *cpumap = calloc(nvcpu, maplen);
+			memset(cpumap, 0, maplen);
+
+			VIR_USE_CPU(cpumap, pinPcpu);
+
+			if (virDomainPinVcpu(domainList[domainIndex], 0, cpumap, maplen) == -1)
+			{
+				printf("Failed to pin vcpu to pcpu for domain # %d\n", domainIndex);
+			}
+
+			// printf("Domain[%d]: VCPU pinned to PCPU[%d] with bitmap: %x.\n",domainIndex,pinPcpu,*cpumap);
+			free(cpumap);
+			virDomainFree(domainList[domainIndex]);
+		}
+
+		// free calloc
+		free(bucketArray);
+	}
+
+	// Free previous usage memory region and point to current usage
+	free(pcpusUtilization);
+	free(domainLoadPtr);
+	free(domainPreviousUsage);
+	free(domainList);
+	domainPreviousUsage = domainUsage;
+	domainUsage = NULL;
 }
 
-void getHostCPUInfo(virConnectPtr conn, int *numberOfPhysicalCPUs) {
-
-    virNodeInfo hostInfo;
-
-    if (virNodeGetInfo(conn, &hostInfo) != 0) {
-        fprintf(stderr, "Error retrieving host information.\n");
-        return;
-    }
-
-    *numberOfPhysicalCPUs = VIR_NODEINFO_MAXCPUS(hostInfo);
-    printf("Total physical CPUs as per virNodeGetInfo: %d\n", *numberOfPhysicalCPUs);
+int cmp(const void *a, const void *b)
+{
+	struct DomainLoad *a1 = (struct DomainLoad *)a;
+	struct DomainLoad *a2 = (struct DomainLoad *)b;
+	if ((*a1).usage > (*a2).usage)
+		return -1;
+	else if ((*a1).usage < (*a2).usage)
+		return 1;
+	else
+		return 0;
 }
 
-void retrieveRunningDomainInfo(virConnectPtr conn, int domainCount, virDomainPtr *domains, struct DomainPerformance *domainPerformanceData, int numberOfPhysicalCPUs) {
-
-    for (size_t k = 0; k < domainCount; k++) {
-        virDomainInfo currDomainInfo;
-        if (virDomainGetInfo(domains[k], &currDomainInfo) == -1) {
-            printf("Failed to get domain info for domain # %ld\n", k);
-            continue;
-        }
-
-        int virtualCPUs = currDomainInfo.nrVirtCpu;
-        int cpuMapLength = VIR_CPU_MAPLEN(numberOfPhysicalCPUs);
-        unsigned char *cpuMapping = calloc(virtualCPUs, cpuMapLength);
-        virVcpuInfoPtr virtualCPUInfo = malloc(sizeof(virVcpuInfo) * virtualCPUs);
-
-        if (virDomainGetVcpus(domains[k], virtualCPUInfo, virtualCPUs, cpuMapping, cpuMapLength) == -1) {
-            printf("Failed to get vcpu info for domain # %ld\n", k);
-        }
-
-        domainPerformanceData[k].cpuUsagePercentage = virtualCPUInfo->cpuTime;
-        domainPerformanceData[k].previousAssignedPhysicalCPU = virtualCPUInfo->cpu;
-
-        free(virtualCPUInfo);
-        free(cpuMapping);
-    }
+int min(const void *a, int size)
+{
+	int i, minIndex = 0;
+	double *sumArray = (double *)a;
+	for (i = 1; i < size; i++)
+	{
+		if (*(sumArray + i) < *(sumArray + minIndex))
+		{
+			minIndex = i;
+		}
+	}
+	return minIndex;
 }
-
-void computeCPUUtilization(struct DomainPerformance *domainPerformanceData, double *currentDomainUsage, double elapsedTime, int domainCount, double *physicalCPUUtilization) {
-    for (size_t k = 0; k < domainCount; k++) {
-        domainPerformanceData[k].cpuUsagePercentage = (currentDomainUsage[k] - previousDomainCPUUsage[k]) * 100 / elapsedTime;
-        physicalCPUUtilization[domainPerformanceData[k].previousAssignedPhysicalCPU] += domainPerformanceData[k].cpuUsagePercentage;
-    }
-}
-
-void assigdomainCountsToCPUs(virDomainPtr *domains, struct DomainPerformance *domainPerformanceData, int domainCount, int numberOfPhysicalCPUs) {
-    qsort(domainPerformanceData, domainCount, sizeof(struct DomainPerformance), compareDomainPerformance);
-
-    double *cpuUsageArray = calloc(numberOfPhysicalCPUs, sizeof(double));
-
-    for (size_t k = 0; k < domainCount; k++) {
-        int smallestBucketIndex = findMinIndex(cpuUsageArray, numberOfPhysicalCPUs);
-        cpuUsageArray[smallestBucketIndex] += domainPerformanceData[k].cpuUsagePercentage;
-        domainPerformanceData[k].assignedPhysicalCPU = smallestBucketIndex;
-    }
-
-    for (size_t k = 0; k < domainCount; k++) {
-        int currDomainIndex = domainPerformanceData[k].currDomainIndex;
-        int targetPhysicalCPU = domainPerformanceData[k].assignedPhysicalCPU;
-
-        virDomainInfo currDomainInfo;
-        if (virDomainGetInfo(domains[currDomainIndex], &currDomainInfo) == -1) {
-            printf("Failed to get domain info for domain # %d\n", currDomainIndex);
-            continue;
-        }
-
-        int virtualCPUs = currDomainInfo.nrVirtCpu;
-        int cpuMapLength = VIR_CPU_MAPLEN(numberOfPhysicalCPUs);
-        unsigned char *cpuMapping = calloc(virtualCPUs, cpuMapLength);
-
-		// Set the particular physical CPU as active for the domain
-        VIR_CPU_SET(targetPhysicalCPU, cpuMapping);
-
-        if (virDomainPinVcpu(domains[currDomainIndex], 0, cpuMapping, cpuMapLength) == -1) {
-            fprintf(stderr, "Failed to pin VCPU for domain # %d.\n", currDomainIndex);
-        }
-
-        free(cpuMapping);
-    }
-
-    free(cpuUsageArray);
-}
-
-int compareDomainPerformance(const void *a, const void *b) {
-    struct DomainPerformance *firstDomain = (struct DomainPerformance *)a;
-    struct DomainPerformance *secondDomain = (struct DomainPerformance *)b;
-
-    return (secondDomain->cpuUsagePercentage - firstDomain->cpuUsagePercentage);
-}
-
-int findMinIndex(double *array, int size) {
-
-	if (size <= 0 || !array) return -1;
-	
-    int minIndex = 0;
-    double minValue = array[0];
-
-    for (int k = 1; k < size; k++) {
-        if (array[k] < minValue) {
-            minValue = array[k];
-            minIndex = k;
-        }
-    }
-
-    return minIndex;
-}
- 
