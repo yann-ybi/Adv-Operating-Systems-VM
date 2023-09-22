@@ -4,8 +4,10 @@ Script started on 2023-09-22 21:59:34+00:00 [TERM="xterm-256color" TTY="/dev/pts
 monitor.py: command not found
 ]0;azureuser@pr1-vm: ~/Adv-Operating-Systems-P1/cpu/test[01;32mazureuser@pr1-vm[00m:[01;34m~/Adv-Operating-Systems-P1/cpu/test[00m$ monitor.py -t runtest1.py[K./monitor.py -t runtest1.py
 bash: ./monitor.py: Permission denied
-]0;azureuser@pr1-vm: ~/Adv-Operating-Systems-P1/cpu/test[01;32mazureuser@pr1-vm[00m:[01;34m~/Adv-Operating-Systems-P1/cpu/test[00m$ chmod +x monitor.py -t runtest1.py[K[K[K[K[K[K[K[K[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[K
-[K[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[K[K[K[K[K[K
+]0;azureuser@pr1-vm: ~/Adv-Operating-Systems-P1/cpu/test[01;32mazureuser@pr1-vm[00m:[01;34m~/Adv-Operating-Systems-P1/cpu/test[00m$ chmod +x monitor.py -t runtest1.py[K[K[K[K[K[K[K
+[K[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[K
+
+[K[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[K[K[K[K[K[K
 ]0;azureuser@pr1-vm: ~/Adv-Operating-Systems-P1/cpu/test[01;32mazureuser@pr1-vm[00m:[01;34m~/Adv-Operating-Systems-P1/cpu/test[00m$ chmod +x monitor.py./monitor.py -t runtest1.py
 
 --------------------------------------------------
@@ -174,4 +176,11 @@ Iteration number :  24
 0 - usage: 85.0 | mapping ['aos_vm6', 'aos_vm5']
 1 - usage: 84.0 | mapping ['aos_vm3', 'aos_vm8']
 2 - usage: 84.0 | mapping ['aos_vm1', 'aos_vm2']
-3 - usage: 85.0 | mapping ['aos_vm
+3 - usage: 85.0 | mapping ['aos_vm4', 'aos_vm7']
+
+--------------------------------------------------
+Iteration number :  25
+0 - usage: 83.0 | mapping ['aos_vm6', 'aos_vm5']
+1 - usage: 85.0 | mapping ['aos_vm3', 'aos_vm8']
+2 - usage: 84.0 | mapping ['aos_vm1', 'aos_vm2']
+3 - usage: 84.0 | mapping ['aos_vm4', 'aos_vm7']
