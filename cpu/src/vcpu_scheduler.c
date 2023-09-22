@@ -85,10 +85,8 @@ void CPUScheduler(virConnectPtr conn, int interval)
 
 	virNodeInfo hostInfo;
 	
-	if (fetchHostInfo(conn, &hostInfo) == -1) {
-		virConnectClose(conn);
-		return;
-	}
+	if (virNodeGetInfo(conn, hostInfo) == -1)
+		fprintf(stderr, "Error: Unable to retrieve host information.\n");
 
 	int numPhysicalCPUs = VIR_NODEINFO_MAXCPUS(hostInfo);
 	
@@ -101,7 +99,7 @@ void CPUScheduler(virConnectPtr conn, int interval)
 		fprintf(stderr, "Error: Memory allocation failed for utilizationList_pCPU.\n");
 		return;
 	}
-	
+
 	virDomainPtr *domains;
 	int numActiveDomains = virConnectListAllDomains(conn, &domains, VIR_CONNECT_LIST_DOMAINS_RUNNING);
 	if (numActiveDomains < 0) {
@@ -128,7 +126,7 @@ void CPUScheduler(virConnectPtr conn, int interval)
 		if (virDomainGetVcpus(domains[k], info_vCPU, numVirtualCPUs, mapCPU, mapSize_pCPU) == -1)
 			fprintf(stderr, "Error: Unable to retrieve the domain virtual CPUs information.\n");
 
-		(loadList + k)->iprevCPU = info_vCPU->cpu;
+		(loadList + k)->iprevpCPU = info_vCPU->cpu;
 		usageList[k] = info_vCPU->cpuTime;
 
 		free(mapCPU);
@@ -191,16 +189,6 @@ double convertSecondsToNanoseconds(int interval) {
 	return interval * NANOSECONDS_IN_A_SECOND;
 }
 
-int fetchHostInfo(virConnectPtr conn, virNodeInfo *hostInfo) {
-	if (virNodeGetInfo(conn, hostInfo) == -1) {
-		virErrorPtr error = virGetLastError();
-		fprintf(stderr, "Error: Unable to retrieve host information.\n");
-		virFreeError(error);
-		return -1;
-	}
-	return 0;
-}
-
 double computeDomainUtilization(double currUsage, double prevUsage, double timeInterval) {
 	return (currUsage - prevUsage) * 100 / timeInterval;
 }
@@ -208,7 +196,7 @@ double computeDomainUtilization(double currUsage, double prevUsage, double timeI
 void updateDomainAndCPUUtilization(double* utilizationList_pCPU, struct VirtualMachineLoad* loadList, double* usageList, double* prevUsageList, double timeInterval, int numActiveDomains) {
     for (size_t k = 0; k < numActiveDomains; k++) {
         loadList[k].usage = computeDomainUtilization(usageList[k], prevUsageList[k], timeInterval);
-        utilizationList_pCPU[loadList[k].iprevCPU] += loadList[k].usage;
+        utilizationList_pCPU[loadList[k].iprevpCPU] += loadList[k].usage;
     }
 }
 
