@@ -85,7 +85,7 @@ void CPUScheduler(virConnectPtr conn, int interval)
 
 	virNodeInfo hostInfo;
 	
-	if (virNodeGetInfo(conn, hostInfo) == -1)
+	if (virNodeGetInfo(conn, &hostInfo) == -1)
 		fprintf(stderr, "Error: Unable to retrieve host information.\n");
 
 	int numPhysicalCPUs = VIR_NODEINFO_MAXCPUS(hostInfo);
@@ -173,7 +173,7 @@ void CPUScheduler(virConnectPtr conn, int interval)
 		int cpuMappingLength = VIR_CPU_MAPLEN(numPhysicalCPUs);
 		unsigned char *cpuPinMap = calloc(numVirtualCPUs, cpuMappingLength);
 
-		VIR_SET_CPU(cpuPinMap, targetPhysicalCPU);
+		VIR_USE_CPU(cpuPinMap, targetPhysicalCPU);
 		if (virDomainPinVcpu(domains[activeDomainIndex], 0, cpuPinMap, cpuMappingLength) == -1)
 			fprintf(stderr, "Error: Unable to pin virtual CPU to physical CPU.\n");
 
