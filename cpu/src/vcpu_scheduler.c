@@ -9,6 +9,12 @@
 #define MIN(a,b) ((a)<(b)?a:b)
 #define MAX(a,b) ((a)>(b)?a:b)
 
+typedef struct {
+    virDomainPtr domain;        // Reference to the domain
+    unsigned long long prevCpuTime; // Previous CPU time 
+    int vcpuNum;                // VCPU number 
+} DomainInfo;
+
 int is_exit = 0; // DO NOT MODIFY THIS VARIABLE
 
 void CPUScheduler(virConnectPtr conn,int interval);
@@ -83,14 +89,19 @@ void CPUScheduler(virConnectPtr conn, int interval) {
 
         virVcpuInfoPtr vcpuInfo = malloc(sizeof(virVcpuInfo));
         virDomainGetVcpus(domainInfos[i].domain, vcpuInfo, 1, NULL, 0);
+
+		domainInfos[i].vcpuNum = vcpuInfo->number;
+		domainInfos[i].prevCpuTime = vcpuInfo->cpuTime;
+
         currCpuTime = vcpuInfo->time;
         double vcpuUsage = ((double)(currCpuTime - domainInfos[i].prevCpuTime) / (interval * 1e9)) * 100;
-
+		domainInfos[i].prevCpuTime = currCpuTime;
+		
         // Determine the current map between VCPU to PCPU
         unsigned char *cpumap = (unsigned char *)malloc(sizeof(unsigned char) * numPcpus);
         virDomainGetVcpuPinInfo(domainInfos[i].domain, 1, cpumap, numPcpus, VIR_DOMAIN_AFFECT_CURRENT);
 
-        // Write algorithm to find "the best" PCPU to pin each VCPU
+        // Algorithm to find "the best" PCPU to pin each VCPU
         int currPCpu = -1;
         for (int j = 0; j < numPcpus; j++) {
             if (cpumap[j] == 1) { // The VCPU is pinned to this pCPU
