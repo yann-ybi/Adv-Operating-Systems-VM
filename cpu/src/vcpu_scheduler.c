@@ -13,15 +13,6 @@ int is_exit = 0; // DO NOT MODIFY THIS VARIABLE
 
 double *prevUsageList = NULL;
 void CPUScheduler(virConnectPtr conn,int interval);
-double convertSecondsToNanoseconds(int interval);
-int fetchHostInfo(virConnectPtr conn, virNodeInfo *hostInfo);
-double computeDomainUtilization(double currUsage, double prevUsage, double timeInterval);
-void updateDomainAndCPUUtilization(double* utilizationList_pCPU, struct VirtualMachineLoad* loadList, double* usageList, double* prevUsageList, double timeInterval, int numActiveDomains);
-double calculateMean(double* data, int length);
-double calculateStandardDeviation(double* data, int length, double mean);
-int compareDomains(const void *a, const void *b);
-unsigned int findMinIndex(const double *arr, int length);
-void cleanup(virDomainPtr* domains, double* usageList, double* prevUsageList, double* utilizationList_pCPU, struct VirtualMachineLoad* loadList);
 /*
 DO NOT CHANGE THE FOLLOWING FUNCTION
 */
@@ -80,7 +71,7 @@ void CPUScheduler(virConnectPtr conn, int interval) {
     double *pcpuUtilizations = (double *)malloc(sizeof(double) * numPcpus);
     memset(pcpuUtilizations, 0, sizeof(double) * numPcpus);
 
-    // 2. Get all active running virtual machines
+    // Get all active running virtual machines
     numDomains = virConnectNumOfDomains(conn);
     activeDomains = (int *)malloc(sizeof(int) * numDomains);
     virConnectListDomains(conn, activeDomains, numDomains);
@@ -94,14 +85,13 @@ void CPUScheduler(virConnectPtr conn, int interval) {
         virVcpuInfoPtr vcpuInfo = malloc(sizeof(virVcpuInfo));
         virDomainGetVcpus(domainInfos[i].domain, vcpuInfo, 1, NULL, 0);
         currCpuTime = vcpuInfo->time;
-
         double vcpuUsage = ((double)(currCpuTime - domainInfos[i].prevCpuTime) / (interval * 1e9)) * 100;
 
-        // 5. Determine the current map (affinity) between VCPU to PCPU
+        // Determine the current map between VCPU to PCPU
         unsigned char *cpumap = (unsigned char *)malloc(sizeof(unsigned char) * numPcpus);
         virDomainGetVcpuPinInfo(domainInfos[i].domain, 1, cpumap, numPcpus, VIR_DOMAIN_AFFECT_CURRENT);
 
-        // 6. Write your algorithm to find "the best" PCPU to pin each VCPU
+        // Write algorithm to find "the best" PCPU to pin each VCPU
         int currPCpu = -1;
         for (int j = 0; j < numPcpus; j++) {
             if (cpumap[j] == 1) { // The VCPU is pinned to this pCPU
@@ -140,7 +130,7 @@ void CPUScheduler(virConnectPtr conn, int interval) {
                     bestPcpu = j;
                 }
             }
-            unsigned char cpumap = 1 << bestPcpu; // Pinning to bestPcpu
+            unsigned char cpumap = 1 << bestPcpu; // Pinning to bestPcpu !!
             virDomainPinVcpu(domainInfos[i].domain, domainInfos[i].vcpuNum, &cpumap, 1);
         }
     }
