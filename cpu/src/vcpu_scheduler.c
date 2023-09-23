@@ -132,7 +132,7 @@ void CPUScheduler(virConnectPtr conn, int interval)
 
     if (prevUsageList == NULL) {
         prevUsageList = usageList;
-		usageList == NULL;
+		usageList = NULL;
         for (size_t k = 0; k < numActiveDomains; k++) virDomainFree(domains[k]);
 		free(loadList);
         free(domains);
