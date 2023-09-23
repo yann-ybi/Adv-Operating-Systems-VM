@@ -69,7 +69,7 @@ int main(int argc, char *argv[])
 void CPUScheduler(virConnectPtr conn, int interval) {
     int numDomains;
     int *activeDomains;
-    virDomainInfo domainInfo;
+
     int numPcpus = virNodeGetCPUMap(conn, NULL, NULL, 0);
 
     // Array to store each pCPU's utilization
@@ -93,7 +93,7 @@ void CPUScheduler(virConnectPtr conn, int interval) {
 		domainInfos[i].vcpuNum = vcpuInfo->number;
 		domainInfos[i].prevCpuTime = vcpuInfo->cpuTime;
 
-        currCpuTime = vcpuInfo->time;
+        currCpuTime = vcpuInfo->cpuTime;
         double vcpuUsage = ((double)(currCpuTime - domainInfos[i].prevCpuTime) / (interval * 1e9)) * 100;
 		domainInfos[i].prevCpuTime = currCpuTime;
 		
