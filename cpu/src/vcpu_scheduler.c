@@ -130,7 +130,7 @@ void CPUScheduler(virConnectPtr conn, int interval)
 
     if (!prevUsageList) {
         prevUsageList = usageList;
-		usageList == NULL;
+		usageList = NULL;
         cleanup(domains, usageList, NULL, NULL, loadList);
         return;
     }
