@@ -64,5 +64,56 @@ COMPLETE THE IMPLEMENTATION
 */
 void MemoryScheduler(virConnectPtr conn, int interval)
 {
-	
+    int i, numDomains;
+    int *activeDomains;
+    virDomainInfo domainInfo;
+    virDomainMemoryStatStruct stats[VIR_DOMAIN_MEMORY_STAT_NR];
+
+    // Get the list of active domains.
+    numDomains = virConnectNumOfDomains(conn);
+    activeDomains = malloc(sizeof(int) * numDomains);
+    numDomains = virConnectListDomains(conn, activeDomains, numDomains);
+
+    for (i = 0; i < numDomains; i++) {
+        virDomainPtr domain = virDomainLookupByID(conn, activeDomains[i]);
+        if (domain == NULL) {
+            continue;
+        }
+
+        // Set the STATS_PERIOD for the domain
+        virDomainSetMemoryStatsPeriod(domain, interval, 0);
+
+        int nstats = virDomainMemoryStats(domain, stats, VIR_DOMAIN_MEMORY_STAT_NR, 0);
+        unsigned long totalMem = 0;
+        unsigned long unusedMem = 0;
+
+        for (int j = 0; j < nstats; j++) {
+            if (stats[j].tag == VIR_DOMAIN_MEMORY_STAT_ACTUAL_BALLOON) {
+                totalMem = stats[j].val;
+            } else if (stats[j].tag == VIR_DOMAIN_MEMORY_STAT_UNUSED) {
+                unusedMem = stats[j].val;
+            }
+        }
+
+        // Memory management
+        if (unusedMem > 100) {
+			 // Retain 100MB unused memory
+            unsigned long memToRelease = unusedMem - 100; 
+            if (memToRelease > 50) {  // Gradual release
+                memToRelease = 50;
+            }
+            totalMem -= memToRelease;  // Reduce actual memory
+            virDomainSetMemory(domain, totalMem);
+        }
+
+        virDomainFree(domain);
+    }
+
+    // Check host memory
+    unsigned long freeMem = virNodeGetFreeMemory(conn);
+    if (freeMem <= 200*1024*1024) {  // 200MB to bytes
+        printf("Warning: Host has low memory. Consider actions.\n");
+    }
+
+    free(activeDomains);
 }
