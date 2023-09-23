@@ -11,7 +11,6 @@
 
 int is_exit = 0; // DO NOT MODIFY THIS VARIABLE
 
-double *prevUsageList = NULL;
 void CPUScheduler(virConnectPtr conn,int interval);
 /*
 DO NOT CHANGE THE FOLLOWING FUNCTION
