@@ -64,9 +64,8 @@ COMPLETE THE IMPLEMENTATION
 */
 void MemoryScheduler(virConnectPtr conn, int interval)
 {
-    int i, numDomains;
+    int k, numDomains;
     int *activeDomains;
-    virDomainInfo domainInfo;
     virDomainMemoryStatStruct stats[VIR_DOMAIN_MEMORY_STAT_NR];
 
     // Get the list of active domains.
@@ -74,8 +73,8 @@ void MemoryScheduler(virConnectPtr conn, int interval)
     activeDomains = malloc(sizeof(int) * numDomains);
     numDomains = virConnectListDomains(conn, activeDomains, numDomains);
 
-    for (i = 0; i < numDomains; i++) {
-        virDomainPtr domain = virDomainLookupByID(conn, activeDomains[i]);
+    for (k = 0; k < numDomains; k++) {
+        virDomainPtr domain = virDomainLookupByID(conn, activeDomains[k]);
         if (domain == NULL) {
             continue;
         }

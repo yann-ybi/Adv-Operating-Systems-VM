@@ -69,12 +69,11 @@ int main(int argc, char *argv[])
 void CPUScheduler(virConnectPtr conn, int interval) {
     int numDomains;
     int *activeDomains;
-
     int numPcpus = virNodeGetCPUMap(conn, NULL, NULL, 0);
 
     // Array to store each pCPU's utilization
-    double *pcpuUtilizations = (double *)malloc(sizeof(double) * numPcpus);
-    memset(pcpuUtilizations, 0, sizeof(double) * numPcpus);
+    double *pCpuUtilizations = (double *)malloc(sizeof(double) * numPcpus);
+    memset(pCpuUtilizations, 0, sizeof(double) * numPcpus);
 
     // Get all active running virtual machines
     numDomains = virConnectNumOfDomains(conn);
@@ -84,68 +83,68 @@ void CPUScheduler(virConnectPtr conn, int interval) {
     DomainInfo *domainInfos = (DomainInfo *)malloc(sizeof(DomainInfo) * numDomains);
     unsigned long long currCpuTime;
 
-    for (int i = 0; i < numDomains; i++) {
-        domainInfos[i].domain = virDomainLookupByID(conn, activeDomains[i]);
+    for (int k = 0; k < numDomains; k++) {
+        domainInfos[k].domain = virDomainLookupByID(conn, activeDomains[k]);
 
-        virVcpuInfoPtr vcpuInfo = malloc(sizeof(virVcpuInfo));
-        virDomainGetVcpus(domainInfos[i].domain, vcpuInfo, 1, NULL, 0);
+        virVcpuInfoPtr vCpuInfo = malloc(sizeof(virVcpuInfo));
+        virDomainGetVcpus(domainInfos[k].domain, vCpuInfo, 1, NULL, 0);
 
-		domainInfos[i].vcpuNum = vcpuInfo->number;
-		domainInfos[i].prevCpuTime = vcpuInfo->cpuTime;
+		domainInfos[k].vcpuNum = vCpuInfo->number;
+		domainInfos[k].prevCpuTime = vCpuInfo->cpuTime;
 
-        currCpuTime = vcpuInfo->cpuTime;
-        double vcpuUsage = ((double)(currCpuTime - domainInfos[i].prevCpuTime) / (interval * 1e9)) * 100;
-		domainInfos[i].prevCpuTime = currCpuTime;
+        currCpuTime = vCpuInfo->cpuTime;
+        double vcpuUsage = ((double)(currCpuTime - domainInfos[k].prevCpuTime) / (interval * 1e9)) * 100;
+		domainInfos[k].prevCpuTime = currCpuTime;
 		
         // Determine the current map between VCPU to PCPU
-        unsigned char *cpumap = (unsigned char *)malloc(sizeof(unsigned char) * numPcpus);
-        virDomainGetVcpuPinInfo(domainInfos[i].domain, 1, cpumap, numPcpus, VIR_DOMAIN_AFFECT_CURRENT);
+        unsigned char *currCpuMap = (unsigned char *)malloc(sizeof(unsigned char) * numPcpus);
+        virDomainGetVcpuPinInfo(domainInfos[k].domain, 1, currCpuMap, numPcpus, VIR_DOMAIN_AFFECT_CURRENT);
 
         // Algorithm to find "the best" PCPU to pin each VCPU
         int currPCpu = -1;
         for (int j = 0; j < numPcpus; j++) {
-            if (cpumap[j] == 1) { // The VCPU is pinned to this pCPU
+            if (currCpuMap[j] == 1) { // The VCPU is pinned to this pCPU
                 currPCpu = j;
                 break;
             }
         }
 
         if (currPCpu >= 0) {
-            pcpuUtilizations[currPCpu] += vcpuUsage;
+            pCpuUtilizations[currPCpu] += vcpuUsage;
         }
 
-        free(vcpuInfo);
-        free(cpumap);
+        free(vCpuInfo);
+        free(currCpuMap);
     }
 
     // Calculate the mean utilization
     double meanUtilization = 0.0;
-    for (int i = 0; i < numPcpus; i++) {
-        meanUtilization += pcpuUtilizations[i];
+    for (int k = 0; k < numPcpus; k++) {
+        meanUtilization += pCpuUtilizations[k];
     }
     meanUtilization /= numPcpus;
 
     // Calculate the standard deviation of utilization
     double variance = 0.0;
-    for (int i = 0; i < numPcpus; i++) {
-        variance += pow(pcpuUtilizations[i] - meanUtilization, 2);
+    for (int k = 0; k < numPcpus; k++) {
+        variance += pow(pCpuUtilizations[k] - meanUtilization, 2);
     }
     double stddev = sqrt(variance / numPcpus);
 
     if (stddev > 0.05 * meanUtilization) {
-        for (int i = 0; i < numDomains; i++) {
+        for (int k = 0; k < numDomains; k++) {
             int bestPcpu = 0;
             for (int j = 1; j < numPcpus; j++) {
-                if (pcpuUtilizations[j] < pcpuUtilizations[bestPcpu]) {
+                if (pCpuUtilizations[j] < pCpuUtilizations[bestPcpu]) {
                     bestPcpu = j;
                 }
             }
-            unsigned char cpumap = 1 << bestPcpu; // Pinning to bestPcpu !!
-            virDomainPinVcpu(domainInfos[i].domain, domainInfos[i].vcpuNum, &cpumap, 1);
+            unsigned char currCpuMap = 1 << bestPcpu; // Pinning to bestPcpu !!
+            virDomainPinVcpu(domainInfos[k].domain, domainInfos[k].vcpuNum, &currCpuMap, 1);
         }
     }
 
     free(activeDomains);
     free(domainInfos);
-    free(pcpuUtilizations);
+    free(pCpuUtilizations);
 }
