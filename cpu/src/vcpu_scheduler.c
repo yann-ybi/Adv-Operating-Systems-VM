@@ -101,16 +101,15 @@ void CPUScheduler(virConnectPtr conn, int interval)
 
 	virDomainPtr *domains;
 	int numActiveDomains = virConnectListAllDomains(conn, &domains, VIR_CONNECT_LIST_DOMAINS_RUNNING);
-	if (numActiveDomains < 0) {
+	if (numActiveDomains < 0) 
 		fprintf(stderr, "Error: Unable to fetch the list of active virtual domains.\n");
-		if (domains) { free(domains); }
-	}
 
 	struct VirtualMachineLoad *loadList = calloc(sizeof(struct VirtualMachineLoad), numActiveDomains);
-	
 	double *usageList = calloc(sizeof(double), numActiveDomains);
+
 	for (size_t k = 0; k < numActiveDomains; k++) {
 		virDomainInfo domainInfo;
+		
 		if (virDomainGetInfo(domains[k], &domainInfo) == -1) 
 			fprintf(stderr, "Error: Unable to retrieve domain information.\n");
 		
@@ -119,25 +118,24 @@ void CPUScheduler(virConnectPtr conn, int interval)
 		int numVirtualCPUs = domainInfo.nrVirtCpu;
 
 		unsigned char *mapCPU = calloc(numVirtualCPUs, mapSize_pCPU);
-
 		virVcpuInfoPtr info_vCPU = malloc(sizeof(virVcpuInfo) * numVirtualCPUs);
+
 		if (virDomainGetVcpus(domains[k], info_vCPU, numVirtualCPUs, mapCPU, mapSize_pCPU) == -1)
 			fprintf(stderr, "Error: Unable to retrieve the domain virtual CPUs information.\n");
 
 		(loadList + k)->iprevpCPU = info_vCPU->cpu;
 		usageList[k] = info_vCPU->cpuTime;
 
-		free(mapCPU);
 		free(info_vCPU);
+		free(mapCPU);
 	}
 
-    if (!prevUsageList) {
+    if (prevUsageList == NULL) {
         prevUsageList = usageList;
-        for (size_t k = 0; k < numActiveDomains; k++) {
-            virDomainFree(domains[k]);
-        }
+		usageList == NULL;
+        for (size_t k = 0; k < numActiveDomains; k++) virDomainFree(domains[k]);
+		free(loadList);
         free(domains);
-        free(loadList);
         return;
     }
 
@@ -193,6 +191,7 @@ double computeDomainUtilization(double currUsage, double prevUsage, double timeI
 
 void updateDomainAndCPUUtilization(double* utilizationList_pCPU, struct VirtualMachineLoad* loadList, double* usageList, double* prevUsageList, double timeInterval, int numActiveDomains) {
     for (size_t k = 0; k < numActiveDomains; k++) {
+
         loadList[k].usage = computeDomainUtilization(usageList[k], prevUsageList[k], timeInterval);
         utilizationList_pCPU[loadList[k].iprevpCPU] += loadList[k].usage;
     }
