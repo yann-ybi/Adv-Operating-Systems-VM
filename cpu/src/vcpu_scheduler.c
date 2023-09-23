@@ -80,8 +80,6 @@ int main(int argc, char *argv[])
 /* COMPLETE THE IMPLEMENTATION */
 void CPUScheduler(virConnectPtr conn, int interval)
 {
-	double timeInterval = convertSecondsToNanoseconds(interval);
-
 	virNodeInfo hostInfo;
 	
 	if (virNodeGetInfo(conn, &hostInfo) == -1)
@@ -130,55 +128,58 @@ void CPUScheduler(virConnectPtr conn, int interval)
 		free(mapCPU);
 	}
 
-    if (prevUsageList == NULL) {
+    if (!prevUsageList) {
         prevUsageList = usageList;
-		usageList = NULL;
-        for (size_t k = 0; k < numActiveDomains; k++) virDomainFree(domains[k]);
-		free(loadList);
-        free(domains);
+		usageList == NULL;
+        cleanup(domains, usageList, NULL, NULL, loadList);
         return;
     }
+
+	double timeInterval = convertSecondsToNanoseconds(interval);
 
 	updateDomainAndCPUUtilization(utilizationList_pCPU, loadList, usageList, prevUsageList, timeInterval, numActiveDomains);
 
 	double mean = calculateMean(utilizationList_pCPU, numPhysicalCPUs);
     double standDev = calculateStandardDeviation(utilizationList_pCPU, numPhysicalCPUs, mean);
+
 	if (standDev <= 5 ) {
 		cleanup(domains, usageList, prevUsageList, utilizationList_pCPU, loadList);
 		return;
 	}
 
-	double *loadListpCPUs = calloc(sizeof(double), numPhysicalCPUs);
 	qsort(loadList, numActiveDomains, sizeof(struct VirtualMachineLoad), compareDomains);
 
-	for (size_t k = 0; k < numActiveDomains; k++) {
-		unsigned int indexLeastLoaded = findMinIndex(loadListpCPUs, numPhysicalCPUs);
-		*(indexLeastLoaded + loadListpCPUs) += (loadList + k)->usage;
-		(loadList + k)->ipCPU = indexLeastLoaded;
-	}
+    double *loadListpCPUs = calloc(sizeof(double), numPhysicalCPUs);
 
-	for (size_t k = 0; k < numActiveDomains; k++) {
-		int activeDomainIndex = (loadList + k)->index;
-		int targetPhysicalCPU = (loadList + k)->ipCPU;
+    for (size_t k = 0; k < numActiveDomains; k++) {
+        unsigned int indexLeastLoaded = findMinIndex(loadListpCPUs, numPhysicalCPUs);
+        *(indexLeastLoaded + loadListpCPUs) += (loadList + k)->usage;
+        (loadList + k)->ipCPU = indexLeastLoaded;
+    }
 
-		virDomainInfo activeDomainInfo;
-		if(virDomainGetInfo(domains[activeDomainIndex], &activeDomainInfo) == -1) 
-			fprintf(stderr, "Error: Unable to retrieve domain information.\n");
+    for (size_t k = 0; k < numActiveDomains; k++) {
+        int activeDomainIndex = (loadList + k)->index;
+        int targetPhysicalCPU = (loadList + k)->ipCPU;
 
-		int numVirtualCPUs = activeDomainInfo.nrVirtCpu;
-		int cpuMappingLength = VIR_CPU_MAPLEN(numPhysicalCPUs);
-		unsigned char *cpuPinMap = calloc(numVirtualCPUs, cpuMappingLength);
+        virDomainInfo activeDomainInfo;
+        if(virDomainGetInfo(domains[activeDomainIndex], &activeDomainInfo) == -1) 
+            fprintf(stderr, "Error: Unable to retrieve domain information.\n");
 
-		VIR_USE_CPU(cpuPinMap, targetPhysicalCPU);
-		if (virDomainPinVcpu(domains[activeDomainIndex], 0, cpuPinMap, cpuMappingLength) == -1)
-			fprintf(stderr, "Error: Unable to pin virtual CPU to physical CPU.\n");
+        int numVirtualCPUs = activeDomainInfo.nrVirtCpu;
+        int cpuMappingLength = VIR_CPU_MAPLEN(numPhysicalCPUs);
 
-		free(cpuPinMap);
-		virDomainFree(domains[activeDomainIndex]);
-	}
-	free(loadListpCPUs);	
+        for(int vcpu=0; vcpu < numVirtualCPUs; vcpu++) {
+            unsigned char *cpuPinMap = calloc(numVirtualCPUs, cpuMappingLength);
 
-	cleanup(domains, NULL, NULL, utilizationList_pCPU, loadList);
+            VIR_USE_CPU(cpuPinMap, targetPhysicalCPU);
+            if (virDomainPinVcpu(domains[activeDomainIndex], vcpu, cpuPinMap, cpuMappingLength) == -1)
+                fprintf(stderr, "Error: Unable to pin virtual CPU to physical CPU.\n");
+
+            free(cpuPinMap);
+        }
+
+        virDomainFree(domains[activeDomainIndex]);
+    }
 }
 
 double convertSecondsToNanoseconds(int interval) {
@@ -191,7 +192,6 @@ double computeDomainUtilization(double currUsage, double prevUsage, double timeI
 
 void updateDomainAndCPUUtilization(double* utilizationList_pCPU, struct VirtualMachineLoad* loadList, double* usageList, double* prevUsageList, double timeInterval, int numActiveDomains) {
     for (size_t k = 0; k < numActiveDomains; k++) {
-
         loadList[k].usage = computeDomainUtilization(usageList[k], prevUsageList[k], timeInterval);
         utilizationList_pCPU[loadList[k].iprevpCPU] += loadList[k].usage;
     }
@@ -207,9 +207,9 @@ double calculateMean(double* data, int length) {
 
 double calculateStandardDeviation(double* data, int length, double mean) {
     double variance = 0.0;
-    for (int i = 0; i < length; ++i) {
+    for (int i = 0; i < length; ++i) 
         variance += pow(data[i] - mean, 2);
-    }
+
     return sqrt(variance / length);
 }
 
