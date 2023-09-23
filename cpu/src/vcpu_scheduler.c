@@ -100,8 +100,6 @@ void CPUScheduler(virConnectPtr conn, int interval)
 
 	virDomainPtr *domains;
 	int numActiveDomains = virConnectListAllDomains(conn, &domains, VIR_CONNECT_LIST_DOMAINS_RUNNING);
-	if (numActiveDomains < 0) 
-		fprintf(stderr, "Error: Unable to fetch the list of active virtual domains.\n");
 
 	struct VirtualMachineLoad *loadList = calloc(sizeof(struct VirtualMachineLoad), numActiveDomains);
 	double *usageList = calloc(sizeof(double), numActiveDomains);
@@ -120,24 +118,23 @@ void CPUScheduler(virConnectPtr conn, int interval)
 		virVcpuInfoPtr info_vCPU = malloc(sizeof(virVcpuInfo) * numVirtualCPUs);
 
 		if (virDomainGetVcpus(domains[k], info_vCPU, numVirtualCPUs, mapCPU, mapSize_pCPU) == -1)
-			fprintf(stderr, "Error: Unable to retrieve the domain virtual CPUs information.\n");
+			fprintf(stderr, "Error: Unable to retrieve the domain virtual CPUs information1\n");
 
-		(loadList + k)->iprevpCPU = info_vCPU->cpu;
 		usageList[k] = info_vCPU->cpuTime;
+		(loadList + k)->iprevpCPU = info_vCPU->cpu;
 
-		free(info_vCPU);
-		free(mapCPU);
+		free(info_vCPU); free(mapCPU);
 	}
 
     if (!prevUsageList) {
         prevUsageList = usageList;
 		usageList = NULL;
+		for (size_t k = 0; k < numActiveDomains; k++) virDomainFree(domains[k]);
         cleanup(domains, usageList, NULL, NULL, loadList);
         return;
     }
 
 	double timeInterval = convertSecondsToNanoseconds(interval);
-
 	updateDomainAndCPUUtilization(utilizationList_pCPU, loadList, usageList, prevUsageList, timeInterval, numActiveDomains);
 
 	double mean = calculateMean(utilizationList_pCPU, numPhysicalCPUs);
@@ -215,38 +212,19 @@ double calculateStandardDeviation(double* data, int length, double mean) {
 }
 
 int compareDomains(const void *a, const void *b) {
-	struct VirtualMachineLoad *a1 = (struct VirtualMachineLoad *)a;
-	struct VirtualMachineLoad *a2 = (struct VirtualMachineLoad *)b;
-	if ((*a1).usage > (*a2).usage)
-		return -1;
-	else if ((*a1).usage < (*a2).usage)
-		return 1;
-	else
-		return 0;
-    // struct VirtualMachineLoad *firstDomain = (struct VirtualMachineLoad *)a;
-    // struct VirtualMachineLoad *seconDomain = (struct VirtualMachineLoad *)b;
+    struct VirtualMachineLoad *firstDomain = (struct VirtualMachineLoad *)a;
+    struct VirtualMachineLoad *seconDomain = (struct VirtualMachineLoad *)b;
 
-    // return (firstDomain->usage > seconDomain->usage) ? -1 : (firstDomain->usage < seconDomain->usage) ? 1 : 0;
+    return (firstDomain->usage > seconDomain->usage) ? -1 : (firstDomain->usage < seconDomain->usage) ? 1 : 0;
 }
 
-unsigned int findMinIndex(const double *a, int size) {
-	int i, minIndex = 0;
-	double *sumArray = (double *)a;
-	for (i = 1; i < size; i++)
-	{
-		if (*(sumArray + i) < *(sumArray + minIndex))
-		{
-			minIndex = i;
-		}
-	}
-	return minIndex;
+unsigned int findMinIndex(const double *arr, int length) {
+    unsigned int index = 0;
 
-    // unsigned int index = 0;
+    for (int k = 1; k < length; k++)
+        if (arr[k] < arr[index]) index = k;
 
-    // for (int k = 1; k < length; k++)
-    //     if (arr[k] < arr[index]) index = k;
-
-    // return index;
+    return index;
 }
 
 void cleanup(virDomainPtr* domains, double* usageList, double* prevUsageList, double* utilizationList_pCPU, struct VirtualMachineLoad* loadList) {
