@@ -83,8 +83,10 @@ void CPUScheduler(virConnectPtr conn, int interval)
 {
 	virNodeInfo hostInfo;
 	
-	if (virNodeGetInfo(conn, &hostInfo) == -1)
+	if (virNodeGetInfo(conn, &hostInfo) == -1) {
 		fprintf(stderr, "Error: Unable to retrieve host information.\n");
+		return;
+	}
 
 	int numPhysicalCPUs = VIR_NODEINFO_MAXCPUS(hostInfo);
 	
@@ -102,8 +104,10 @@ void CPUScheduler(virConnectPtr conn, int interval)
 	for (size_t k = 0; k < numActiveDomains; k++) {
 		virDomainInfo domainInfo;
 		
-		if (virDomainGetInfo(domains[k], &domainInfo) == -1) 
+		if (virDomainGetInfo(domains[k], &domainInfo) == -1){
 			fprintf(stderr, "Error: Unable to retrieve domain information.\n");
+			return;
+		}
 		
 		int mapSize_pCPU = VIR_CPU_MAPLEN(numPhysicalCPUs);
 
@@ -112,8 +116,10 @@ void CPUScheduler(virConnectPtr conn, int interval)
 		unsigned char *mapCPU = calloc(numVirtualCPUs, mapSize_pCPU);
 		virVcpuInfoPtr info_vCPU = malloc(sizeof(virVcpuInfo) * numVirtualCPUs);
 
-		if (virDomainGetVcpus(domains[k], info_vCPU, numVirtualCPUs, mapCPU, mapSize_pCPU) == -1)
-			fprintf(stderr, "Error 1: Unable to retrieve the domain virtual CPUs information\n");
+		if (virDomainGetVcpus(domains[k], info_vCPU, numVirtualCPUs, mapCPU, mapSize_pCPU) == -1) {
+			fprintf(stderr, "Error: Unable to retrieve the domain virtual CPUs information\n");
+			return;
+		}
 
 		usageList[k] = info_vCPU->cpuTime;
 		(loadList + k)->iprevpCPU = info_vCPU->cpu;
@@ -123,7 +129,6 @@ void CPUScheduler(virConnectPtr conn, int interval)
 
     if (!prevUsageList) {
         prevUsageList = usageList;
-		usageList = NULL;
         cleanup(domains, usageList, NULL, NULL, loadList);
         return;
     }
@@ -161,8 +166,10 @@ void CPUScheduler(virConnectPtr conn, int interval)
         int targetPhysicalCPU = (loadList + k)->ipCPU;
 
         virDomainInfo activeDomainInfo;
-        if(virDomainGetInfo(domains[activeDomainIndex], &activeDomainInfo) == -1) 
-            fprintf(stderr, "Error2: Unable to retrieve domain information.\n");
+        if(virDomainGetInfo(domains[activeDomainIndex], &activeDomainInfo) == -1) {
+			fprintf(stderr, "Error2: Unable to retrieve domain information.\n");
+			return;
+		}
 
         int numVirtualCPUs = activeDomainInfo.nrVirtCpu;
         int cpuMappingLength = VIR_CPU_MAPLEN(numPhysicalCPUs);
@@ -171,12 +178,12 @@ void CPUScheduler(virConnectPtr conn, int interval)
             unsigned char *cpuPinMap = calloc(numVirtualCPUs, cpuMappingLength);
 
             VIR_USE_CPU(cpuPinMap, targetPhysicalCPU);
-            if (virDomainPinVcpu(domains[activeDomainIndex], vcpu, cpuPinMap, cpuMappingLength) == -1)
-                fprintf(stderr, "Error: Unable to pin virtual CPU to physical CPU.\n");
-
+            if (virDomainPinVcpu(domains[activeDomainIndex], vcpu, cpuPinMap, cpuMappingLength) == -1) {
+				fprintf(stderr, "Error: Unable to pin virtual CPU to physical CPU.\n");
+				return;
+			}
             free(cpuPinMap);
         }
-
         virDomainFree(domains[activeDomainIndex]);
     }
 }
