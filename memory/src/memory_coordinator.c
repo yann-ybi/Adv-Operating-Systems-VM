@@ -17,6 +17,8 @@ typedef struct {
 } VMStats;
 
 int is_exit = 0; // DO NOT MODIFY THE VARIABLE
+size_t startingVM = 0;
+long long int *priorConsumedMem = NULL;
 
 void MemoryScheduler(virConnectPtr conn,int interval);
 
@@ -116,7 +118,6 @@ void MemoryScheduler(virConnectPtr conn, int interval) {
 
     // Adjusts memory allocations based on the VM needs
     long long int nodeFreeMem = virNodeGetFreeMemory(conn) / 1024;
-	
     if (allVMPeaked && nodeFreeMem > 200) {
         modifyMemoryAllocation(vmList[startingVM], nodeFreeMem - 200);
     } else {
@@ -128,6 +129,7 @@ void MemoryScheduler(virConnectPtr conn, int interval) {
         for (size_t k = 0; k < activeVMs; k++) {
             if (excessMem[k] > 0) {
                 modifyMemoryAllocation(vmList[k], -excessMem[k]);
+            }
         }
     }
 
