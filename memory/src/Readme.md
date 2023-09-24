@@ -1,34 +1,49 @@
-# Memory Scheduler for VMs
+# MemoryScheduler Algorithm
 
-The Memory Scheduler is designed to dynamically adjust the allocated memory of virtual machines (VMs) based on their actual needs. It ensures efficient memory utilization while protecting both the host and VMs from running out of memory.
+## Introduction:
+The MemoryScheduler function is designed to dynamically adjust the memory allocation of active VMs running on a host system. The function takes into account various constraints to ensure optimal performance for both the VMs and the host
 
-## Initialization:
+## Algorithm Overview:
+Data Collection:
 
-Connect to the local hypervisor (qemu:///system).
-Fetch the list of all active VMs/domains.
-Determine the available memory on the host.
-Gathering VM Memory Metrics:
+We fetch the list of all active VMs (domains)
+For each VM, collect memory statistics such as the total balloon memory and the unused memory.
+Calculate available host memory.
 
-## Algorithm:
+### Memory Need Assessment:
+If a VM's unused memory is below a threshold (DOMAIN_MIN_UNUSED_MEMORY), calculate the additional memory it requires.
+If a VM's unused memory exceeds an upper threshold (EXCESS_THRESHOLD), determine how much memory can be released without dropping below a safe threshold.
 
-### For each active VM:
-We set the memory stats period to collect detailed statistics.
-We fetch the current memory details like balloon memory and unused memory.
-We calculate the actual memory in use.
-We determine if the VM has excess memory (above a 100MB threshold) that can be released.
-We determine if the VM needs additional memory (below a 200MB threshold).
+### Memory Reallocation:
+Before any reallocation, ensure that the VM's and the host's memory after the adjustment will stay within safe boundaries.
+For VMs needing additional memory:
+First, try to reallocate memory from VMs that have excess memory to spare.
+If still more memory is needed and the host can provide it without dropping below its own safety threshold, allocate from the host.
+Safety Constraints:
 
-### Memory Redistribution Among VMs:
-For VMs that require additional memory:
-We look for other VMs that have excess memory.
-We reallocate the surplus memory from these VMs to the ones in need.
-We ensure that the transfer of memory does not exceed 50MB at once, to achieve a gradual memory release.
+A VM will not release memory if its unused memory is <= 100MB (DOMAIN_MIN_UNUSED_MEMORY).
+Memory releases from VMs are gradual, no more than a fixed amount (MAX_MEMORY_RELEASE) at once.
+The host will not allocate memory to VMs if it will be left with <= 200MB (HOST_MIN_UNUSED_MEMORY) of available memory.
 
-### Allocating Free Memory from Host:
-If the VMs still require additional memory and the host has more than a 200MB threshold of available memory:
-We allocate the required memory from the host to the VM, ensuring the host retains at least 200MB.
+## Detailed Steps:
+### Initialization:
+Connect to the host system's hypervisor.
+Set memory statistic intervals for each VM for accurate data collection.
+Initialize data structures for storing VM statistics and memory allocation needs.
+Memory Assessment:
 
-### Clean-Up:
-Release all dynamically allocated resources.
+### For each VM, check its unused memory:
+If below DOMAIN_MIN_UNUSED_MEMORY, compute how much more it requires without exceeding the VM's maximum memory limit.
+If above EXCESS_THRESHOLD and the VM can release more than MAX_MEMORY_RELEASE without dropping below the safety threshold, determine the amount it can release.
 
-The Memory Scheduler effectively manages memory distribution among VMs, ensuring optimal performance for both VMs and the host. The algorithm ensures fairness, efficiency, and system stability.
+### Memory Re-Allocation Loop:
+For each VM pair (i, j) where VM i needs more memory and VM j has excess memory to release:
+Transfer memory from j to i, ensuring the transfer amount respects the MAX_MEMORY_RELEASE constraint.
+Update the VMs' current memory and their memory needs.
+For VMs that still need more memory, allocate from the host if the host has enough memory to spare without violating the HOST_MIN_UNUSED_MEMORY constraint.
+Finalization:
+
+Free dynamically allocated memory to prevent memory leaks.
+
+## Conclusion:
+The MemoryScheduler function, when called periodically, ensures that VMs get the memory they require while maintaining a balance to ensure the stability and performance of both the VMs and the host system.
