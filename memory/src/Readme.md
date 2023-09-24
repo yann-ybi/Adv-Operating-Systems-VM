@@ -1,30 +1,34 @@
+## Memory Scheduler for VMs
 
-Our goal is to ensure that virtual machines maintain a healthy amount of unused memory, thereby achieving an efficient memory usage pattern without compromising VM performance.
+The Memory Scheduler is designed to dynamically adjust the allocated memory of virtual machines (VMs) based on their actual needs. It ensures efficient memory utilization while protecting both the host and VMs from running out of memory.
+
+# Initialization:
+
+Connect to the local hypervisor (qemu:///system).
+Fetch the list of all active VMs/domains.
+Determine the available memory on the host.
+Gathering VM Memory Metrics:
 
 # Algorithm:
-We enumerate Active Domains - Connect to the local hypervisor (qemu:///system) and obtain a list of all active VMs (domains).
 
-We set Memory Stats Period - For each active domain, set the STATS_PERIOD. This determines how frequently the VM's memory statistics will be updated.
+For each active VM:
+We set the memory stats period to collect detailed statistics.
+We fetch the current memory details like balloon memory and unused memory.
+We calculate the actual memory in use.
+We determine if the VM has excess memory (above a 100MB threshold) that can be released.
+We determine if the VM needs additional memory (below a 200MB threshold).
 
-We extract Memory Metrics - For each VM, we fetch two key memory statistics:
+Memory Redistribution Among VMs:
+For VMs that require additional memory:
+We look for other VMs that have excess memory.
+We reallocate the surplus memory from these VMs to the ones in need.
+We ensure that the transfer of memory does not exceed 50MB at once, to achieve a gradual memory release.
 
-- Total Allocated Memory, the total memory currently allocated to the VM
-- Unused Memory, the amount of memory that the VM currently isn't using.
+Allocating Free Memory from Host:
+If the VMs still require additional memory and the host has more than a 200MB threshold of available memory:
+We allocate the required memory from the host to the VM, ensuring the host retains at least 200MB.
 
-# Memory Management:
-If a VM has more than 100MB of unused memory:
-We calculate the amount of memory that can be released. We want to retain at least 100MB of unused memory in each VM
-For gradual memory release, we limit the memory release amount to 50MB at a time. This ensures that we don't disrupt the VM's operations by releasing a large amount of memory all at once.
-Adjust the VM's total allocated memory by the amount determined to be released.
-Host Memory Check: Finally, we inspect the total free memory available on the host. If it's less than or equal to 200MB, output a warning message. This serves as a cautionary measure to ensure that the host isn't running into potential out-of-memory scenarios.
+Clean-Up:
+Release all dynamically allocated resources.
 
-Why keep at least 100MB of unused memory in VMs?
-This buffer ensures that sudden memory demands by applications within the VM can be met without requiring immediate memory ballooning operations.
-
-Why release memory gradually?
-Suddenly releasing a large chunk of memory could impact VM performance. Gradual release provides a balance, ensuring VM stability while also optimizing memory usage.
-
-Why monitor host memory?
-The host's available memory is crucial. If the host runs out of memory, it could start swapping, severely degrading performance for all VMs. A warning at the 200MB threshold provides a timely alert for necessary interventions.
-
-Basically, the algorithm is designed to strike a balance between efficient memory utilization and VM performance. Regular monitoring and adaptive memory allocation enable VMs to operate seamlessly while ensuring optimal resource usage.
+The Memory Scheduler effectively manages memory distribution among VMs, ensuring optimal performance for both VMs and the host. The algorithm ensures fairness, efficiency, and system stability.
