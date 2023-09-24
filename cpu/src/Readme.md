@@ -1,13 +1,13 @@
-### Implementation of a CPU scheduler for virtual machines using the libvirt library. 
+# Implementation of a CPU scheduler for virtual machines using the libvirt library. 
 
 Balancing CPU loads across different VMs by adjusting the VM-to-physical CPU mapping dynamically.
 
-# Initialize:
+## Initialize:
 
 Connect to the QEMU hypervisor using the libvirt API.
 Listen for interrupt signals and terminate the program gracefully upon receiving them
 
-# Algorithm:
+## Algorithm:
 
 We repeatedly run the CPUScheduler function at a user-defined interval to check CPU usage and adjust CPU pins.
 There is a sleep for the duration of the interval before repeating the function.
@@ -33,7 +33,7 @@ d. Rebalancing:
 - We reassign VMs to physical CPUs in a manner that balances the load.
 - We update the physical CPU to which each VM's VCPUs are pinned.
 
-# Cleanup:
+## Cleanup:
 
 After each iteration of CPUScheduler, we deallocate any dynamically allocated resources.
 We close the connection to the QEMU hypervisor.
