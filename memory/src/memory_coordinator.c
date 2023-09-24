@@ -63,74 +63,92 @@ int main(int argc, char *argv[])
 COMPLETE THE IMPLEMENTATION
 */
 void MemoryScheduler(virConnectPtr conn, int interval) {
-	virDomainPtr *activeDomains;
-	virDomainInfoPtr domainDetails = malloc(sizeof(virDomainInfo));
-	virDomainMemoryStatPtr memoryStats = malloc(14 * sizeof(virDomainMemoryStatStruct));
+    virDomainPtr *activeDomains;
+    virDomainInfo domainDetails;
+    virDomainMemoryStatStruct memoryStats[14];
 
-	int domainCount = virConnectListAllDomains(conn, &activeDomains, VIR_CONNECT_LIST_DOMAINS_RUNNING);
+    int domainCount = virConnectListAllDomains(conn, &activeDomains, VIR_CONNECT_LIST_DOMAINS_RUNNING);
+    if (domainCount < 0) {
+        fprintf(stderr, "Failed to list domains.\n");
+        return;
+    }
 
-	long long int availableHostMemory = virNodeGetFreeMemory(conn) / 1024;  // in MB
+    long long int availableHostMemory = virNodeGetFreeMemory(conn) / 1024; // MB 
 
-	// Arrays to store memory metrics for each VM
-	long long int* additionalMemoryNeeded = calloc(domainCount, sizeof(long long int));
-	long long int* excessMemory = calloc(domainCount, sizeof(long long int));
-	long long int* currentMemory = calloc(domainCount, sizeof(long long int));
+    const long long int HOST_MIN_UNUSED_MEMORY = 200;
+    const long long int DOMAIN_MIN_UNUSED_MEMORY = 100;
+    const long long int MAX_MEMORY_RELEASE = 50; 
+    const long long int EXCESS_THRESHOLD = 50;
 
-	for (int i = 0; i < domainCount; i++) 
-	{
-		virDomainSetMemoryStatsPeriod(activeDomains[i], interval, VIR_DOMAIN_AFFECT_LIVE);
-		virDomainGetInfo(activeDomains[i], domainDetails);
-		virDomainMemoryStats(activeDomains[i], memoryStats, 14, 0);
+    long long int* additionalMemoryNeeded = calloc(domainCount, sizeof(long long int));
+    long long int* excessMemory = calloc(domainCount, sizeof(long long int));
+    long long int* currentMemory = calloc(domainCount, sizeof(long long int));
 
-		long long int balloonMemory, unusedDomainMemory, activeDomainMemory;
-		for (int j = 0; j < 14; j++) 
-		{
-			if (memoryStats[j].tag == VIR_DOMAIN_MEMORY_STAT_ACTUAL_BALLOON) 
-				balloonMemory = memoryStats[j].val / 1024;
+    for (int i = 0; i < domainCount; i++) {
+        if (virDomainSetMemoryStatsPeriod(activeDomains[i], interval, VIR_DOMAIN_AFFECT_LIVE) < 0) {
+            fprintf(stderr, "Failed to set memory stats period.\n");
+            continue;
+        }
 
-			if (memoryStats[j].tag == VIR_DOMAIN_MEMORY_STAT_UNUSED) 
-				unusedDomainMemory = memoryStats[j].val / 1024;				
-		}
+        if (virDomainGetInfo(activeDomains[i], &domainDetails) < 0) {
+            fprintf(stderr, "Failed to get domain info.\n");
+            continue;
+        }
 
-		activeDomainMemory = balloonMemory - unusedDomainMemory;
+        int statsCount = virDomainMemoryStats(activeDomains[i], memoryStats, 14, 0);
+        if (statsCount < 0) {
+            fprintf(stderr, "Failed to get memory stats.\n");
+            continue;
+        }
 
-		// Calculate additional memory needed/excess based on constraints
-		if (unusedDomainMemory < 200) 
-			additionalMemoryNeeded[i] = MIN(200 - unusedDomainMemory, domainDetails->maxMem / 1024 - balloonMemory);
+        long long int balloonMemory = 0, unusedDomainMemory = 0;
+        for (int j = 0; j < statsCount; j++) {
+            if (memoryStats[j].tag == VIR_DOMAIN_MEMORY_STAT_ACTUAL_BALLOON)
+                balloonMemory = memoryStats[j].val / 1024;
+            else if (memoryStats[j].tag == VIR_DOMAIN_MEMORY_STAT_UNUSED)
+                unusedDomainMemory = memoryStats[j].val / 1024;
+        }
 
-		if (unusedDomainMemory > 100) 
-			excessMemory[i] = MIN(50, unusedDomainMemory - 100);
+        if (unusedDomainMemory < DOMAIN_MIN_UNUSED_MEMORY) 
+            additionalMemoryNeeded[i] = MIN(DOMAIN_MIN_UNUSED_MEMORY - unusedDomainMemory, domainDetails.maxMem / 1024 - balloonMemory);
 
-		currentMemory[i] = balloonMemory;
-	}
+        if (unusedDomainMemory > EXCESS_THRESHOLD && unusedDomainMemory - DOMAIN_MIN_UNUSED_MEMORY > MAX_MEMORY_RELEASE)
+            excessMemory[i] = MIN(MAX_MEMORY_RELEASE, unusedDomainMemory - DOMAIN_MIN_UNUSED_MEMORY);
 
-	// Allocate or release memory for VMs
-	for (int i = 0; i < domainCount; i++) 
-	{
-		for (int j = 0; j < domainCount; j++) 
-		{
-			if (i != j && additionalMemoryNeeded[i] > 0 && excessMemory[j] > 0) 
-			{
-				long long transferSize = MIN(additionalMemoryNeeded[i], excessMemory[j]);
-				virDomainSetMemory(activeDomains[i], (currentMemory[i] + transferSize) * 1024);
-				virDomainSetMemory(activeDomains[j], (currentMemory[j] - transferSize) * 1024);
-				additionalMemoryNeeded[i] -= transferSize;
-				excessMemory[j] -= transferSize;
-			}
-		}
+        currentMemory[i] = balloonMemory;
+    }
 
-		if (additionalMemoryNeeded[i] > 0 && availableHostMemory > 200) 
-		{
-			long long allocateSize = MIN(additionalMemoryNeeded[i], availableHostMemory - 200);
-			virDomainSetMemory(activeDomains[i], (currentMemory[i] + allocateSize) * 1024);
-			availableHostMemory -= allocateSize;
-		}
-	}
+    for (int i = 0; i < domainCount; i++) {
+        for (int j = 0; j < domainCount; j++) {
+            if (i != j && additionalMemoryNeeded[i] > 0 && excessMemory[j] > 0) {
+                long long transferSize = MIN(additionalMemoryNeeded[i], excessMemory[j]);
 
-	free(domainDetails);
-	free(memoryStats);
-	free(additionalMemoryNeeded);
-	free(excessMemory);
-	free(currentMemory);
-	free(activeDomains);
+                long long int newMemoryForDomainI = currentMemory[i] + transferSize;
+                long long int newMemoryForDomainJ = currentMemory[j] - transferSize;
+
+                if (virDomainSetMemory(activeDomains[i], newMemoryForDomainI * 1024) < 0 ||
+                    virDomainSetMemory(activeDomains[j], newMemoryForDomainJ * 1024) < 0) {
+                    fprintf(stderr, "Failed to set domain memory.\n");
+                } else {
+                    additionalMemoryNeeded[i] -= transferSize;
+                    excessMemory[j] -= transferSize;
+                }
+            }
+        }
+
+        if (additionalMemoryNeeded[i] > 0 && availableHostMemory > HOST_MIN_UNUSED_MEMORY) {
+            long long allocateSize = MIN(additionalMemoryNeeded[i], availableHostMemory - HOST_MIN_UNUSED_MEMORY);
+
+            if (virDomainSetMemory(activeDomains[i], (currentMemory[i] + allocateSize) * 1024) < 0) {
+                fprintf(stderr, "Failed to set domain memory.\n");
+            } else {
+                availableHostMemory -= allocateSize;
+            }
+        }
+    }
+
+    free(additionalMemoryNeeded);
+    free(excessMemory);
+    free(currentMemory);
+    free(activeDomains);
 }
