@@ -81,7 +81,7 @@ void MemoryScheduler(virConnectPtr conn, int interval) {
     int allDomainsMaxed = 1;
 
     for (int i = 0; i < domainCount; i++) {
-        virDomainSetMemoryStatsPeriod(activeDomains[i], interval, VIR_CONNECT_AFFECT_LIVE);
+        virDomainSetMemoryStatsPeriod(activeDomains[i], interval, VIR_DOMAIN_AFFECT_LIVE);
         virDomainGetInfo(activeDomains[i], domainInfo);
         virDomainMemoryStats(activeDomains[i], memoryStats, 14, 0);
 
