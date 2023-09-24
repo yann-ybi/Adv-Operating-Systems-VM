@@ -9,9 +9,34 @@
 #define MIN(a,b) ((a)<(b)?a:b)
 #define MAX(a,b) ((a)>(b)?a:b)
 
+long long int *priorConsumedMem = NULL;
+size_t startingVM = 0;
+
+// encapsulate memory statistics for each virtual machine
+typedef struct {
+    long long int allocatedMem;  // Total memory allocated to the VM
+    long long int availableMem;  // Memory that remains unused in the VM
+    long long int consumedMem;   // Memory that's actively used by the VM
+} VMStats;
+
 int is_exit = 0; // DO NOT MODIFY THE VARIABLE
 
 void MemoryScheduler(virConnectPtr conn,int interval);
+
+/**
+ * Collect memory statistics for a given virtual machine instance
+ * @param vmInstance - The virtual machine for which stats are collected
+ * @param statsData - Pointer to VMStats structure to populate with statistics.
+ * @param pollingTime - The interval for which memory stats are gathered
+ */
+void collectVMStats(virDomainPtr vmInstance, VMStats* statsData, int interval);
+
+/**
+ * Adjust memory allocation for a given virtual machine instance.
+ * @param vmInstance - The virtual machine for which memory is adjusted
+ * @param memAdjustment - Amount of memory to be adjusted (can be positive or negative).
+ */
+void modifyMemoryAllocation(virDomainPtr vmInstance, long long int memAdjustment);
 
 /*
 DO NOT CHANGE THE FOLLOWING FUNCTION
@@ -41,7 +66,7 @@ int main(int argc, char *argv[])
 	conn = virConnectOpen("qemu:///system");
 	if(conn == NULL)
 	{
-		fprintf(stderr, "Failed to open connection\n");
+		fprintf(stderr, "Failed to open conn\n");
 		return 1;
 	}
 
@@ -54,7 +79,7 @@ int main(int argc, char *argv[])
 		sleep(interval);
 	}
 
-	// Close the connection
+	// Close the conn
 	virConnectClose(conn);
 	return 0;
 }
@@ -63,74 +88,74 @@ int main(int argc, char *argv[])
 COMPLETE THE IMPLEMENTATION
 */
 void MemoryScheduler(virConnectPtr conn, int interval) {
-	virDomainPtr *activeDomains;
-	virDomainInfoPtr domainDetails = malloc(sizeof(virDomainInfo));
-	virDomainMemoryStatPtr memoryStats = malloc(14 * sizeof(virDomainMemoryStatStruct));
+    virDomainPtr* vmList;
+    int activeVMs = virConnectListAllDomains(conn, &vmList, VIR_CONNECT_LIST_DOMAINS_RUNNING);
 
-	int domainCount = virConnectListAllDomains(conn, &activeDomains, VIR_CONNECT_LIST_DOMAINS_RUNNING);
+    VMStats* vmStatsCollection = calloc(activeVMs, sizeof(VMStats));
+    if (!priorConsumedMem) priorConsumedMem = calloc(activeVMs, sizeof(long long int));
 
-	long long int availableHostMemory = virNodeGetFreeMemory(conn) / 1024;  // in MB
+    // Collect memory stats for all active VMs
+    for (size_t k = 0; k < activeVMs; k++) {
+        collectVMStats(vmList[k], &vmStatsCollection[k], interval);
+        priorConsumedMem[k] = vmStatsCollection[k].consumedMem;
+    }
 
-	// Arrays to store memory metrics for each VM
-	long long int* additionalMemoryNeeded = calloc(domainCount, sizeof(long long int));
-	long long int* excessMemory = calloc(domainCount, sizeof(long long int));
-	long long int* currentMemory = calloc(domainCount, sizeof(long long int));
+    unsigned int allVMPeaked = 1;
+    long long int* neededMem = calloc(activeVMs, sizeof(long long int));
+    long long int* excessMem = calloc(activeVMs, sizeof(long long int));
 
-	for (int i = 0; i < domainCount; i++) 
-	{
-		virDomainSetMemoryStatsPeriod(activeDomains[i], interval, VIR_DOMAIN_AFFECT_LIVE);
-		virDomainGetInfo(activeDomains[i], domainDetails);
-		virDomainMemoryStats(activeDomains[i], memoryStats, 14, 0);
+    // Determines if VMs need more memory or have excess memory
+    for (size_t k = 0; k < activeVMs; k++) {
+        if (priorConsumedMem[k] != 0) {
+            if (vmStatsCollection[k].consumedMem > priorConsumedMem[k] + 10 && vmStatsCollection[k].availableMem < 200) {
+                long long int adjustment = MIN(MAX(200 - vmStatsCollection[k].availableMem, 50), vmStatsCollection[k].allocatedMem);
+                neededMem[k] = adjustment;
+            } else if (vmStatsCollection[k].consumedMem <= priorConsumedMem[k] && vmStatsCollection[k].availableMem > 100) {
+                excessMem[k] = MIN(50, vmStatsCollection[k].availableMem - 100);
+                allVMPeaked = 0;
+            }
+        }
+    }
 
-		long long int balloonMemory, unusedDomainMemory, activeDomainMemory;
-		for (int j = 0; j < 14; j++) 
-		{
-			if (memoryStats[j].tag == VIR_DOMAIN_MEMORY_STAT_ACTUAL_BALLOON) 
-				balloonMemory = memoryStats[j].val / 1024;
+    // Adjusts memory allocations based on the VM needs
+    long long int nodeFreeMem = virNodeGetFreeMemory(conn) / 1024;
+    if (allVMPeaked && nodeFreeMem > 200) {
+        modifyMemoryAllocation(vmList[startingVM], nodeFreeMem - 200);
+    } else {
+        for (size_t k = 0; k < activeVMs; k++) {
+            if (neededMem[k] > 0) 
+                modifyMemoryAllocation(vmList[k], neededMem[k]);
+            if (excessMem[k] > 0)
+                modifyMemoryAllocation(vmList[k], -excessMem[k]);
+        }
+    }
 
-			if (memoryStats[j].tag == VIR_DOMAIN_MEMORY_STAT_UNUSED) 
-				unusedDomainMemory = memoryStats[j].val / 1024;				
-		}
+    startingVM = (startingVM + 1) % activeVMs;
+    free(vmStatsCollection);
+    free(neededMem);
+    free(excessMem);
+}
 
-		activeDomainMemory = balloonMemory - unusedDomainMemory;
+void collectVMStats(virDomainPtr vmInstance, VMStats* statsData, int interval) {
+    virDomainMemoryStatPtr memoryStats = malloc(14 * sizeof(virDomainMemoryStatStruct));
+    virDomainSetMemoryStatsPeriod(vmInstance, interval, VIR_DOMAIN_AFFECT_LIVE);
+    virDomainMemoryStats(vmInstance, memoryStats, 14, 0);
 
-		// Calculate additional memory needed/excess based on constraints
-		if (unusedDomainMemory < 200) 
-			additionalMemoryNeeded[i] = MIN(200 - unusedDomainMemory, domainDetails->maxMem / 1024 - balloonMemory);
+    for (size_t k = 0; k < 14; k++) {
+        if (memoryStats[k].tag == VIR_DOMAIN_MEMORY_STAT_ACTUAL_BALLOON)
+            statsData->allocatedMem = memoryStats[k].val / 1024;
 
-		if (unusedDomainMemory > 100) 
-			excessMemory[i] = MIN(50, unusedDomainMemory - 100);
+        if (memoryStats[k].tag == VIR_DOMAIN_MEMORY_STAT_UNUSED)
+            statsData->availableMem = memoryStats[k].val / 1024;
+    }
 
-		currentMemory[i] = balloonMemory;
-	}
+    statsData->consumedMem = statsData->allocatedMem - statsData->availableMem;
+    free(memoryStats);
+}
 
-	// Allocate or release memory for VMs
-	for (int i = 0; i < domainCount; i++) 
-	{
-		for (int j = 0; j < domainCount; j++) 
-		{
-			if (i != j && additionalMemoryNeeded[i] > 0 && excessMemory[j] > 0) 
-			{
-				long long transferSize = MIN(additionalMemoryNeeded[i], excessMemory[j]);
-				virDomainSetMemory(activeDomains[i], (currentMemory[i] + transferSize) * 1024);
-				virDomainSetMemory(activeDomains[j], (currentMemory[j] - transferSize) * 1024);
-				additionalMemoryNeeded[i] -= transferSize;
-				excessMemory[j] -= transferSize;
-			}
-		}
-
-		if (additionalMemoryNeeded[i] > 0 && availableHostMemory > 200) 
-		{
-			long long allocateSize = MIN(additionalMemoryNeeded[i], availableHostMemory - 200);
-			virDomainSetMemory(activeDomains[i], (currentMemory[i] + allocateSize) * 1024);
-			availableHostMemory -= allocateSize;
-		}
-	}
-
-	free(domainDetails);
-	free(memoryStats);
-	free(additionalMemoryNeeded);
-	free(excessMemory);
-	free(currentMemory);
-	free(activeDomains);
+void modifyMemoryAllocation(virDomainPtr vmInstance, long long int memAdjustment) {
+    virDomainInfo vmInfo;
+    virDomainGetInfo(vmInstance, &vmInfo);
+    long long int adjustedMemory = (vmInfo.memory / 1024) + memAdjustment;
+    virDomainSetMemory(vmInstance, adjustedMemory * 1024);
 }
