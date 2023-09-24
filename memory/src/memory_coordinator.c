@@ -9,9 +9,6 @@
 #define MIN(a,b) ((a)<(b)?a:b)
 #define MAX(a,b) ((a)>(b)?a:b)
 
-long long int* prevUsedMem = NULL;
-long long int firstVcupu = 0;
-
 int is_exit = 0; // DO NOT MODIFY THE VARIABLE
 
 void MemoryScheduler(virConnectPtr conn,int interval);
@@ -59,121 +56,81 @@ int main(int argc, char *argv[])
 
 	// Close the connection
 	virConnectClose(conn);
-	free( prevUsedMem );
 	return 0;
 }
 
 /*
 COMPLETE THE IMPLEMENTATION
 */
-void MemoryScheduler(virConnectPtr conn, int interval)
-{
-	virDomainPtr *domains;
-	virDomainInfoPtr info = malloc( sizeof( virDomainInfo ) );
-	virDomainMemoryStatPtr memInfo= malloc( 14 * sizeof( virDomainMemoryStatStruct ) );
+void MemoryScheduler(virConnectPtr conn, int interval) {
+	virDomainPtr *activeDomains;
+	virDomainInfoPtr domainDetails = malloc(sizeof(virDomainInfo));
+	virDomainMemoryStatPtr memoryStats = malloc(14 * sizeof(virDomainMemoryStatStruct));
 
-	int numDomains = virConnectListAllDomains( conn, &domains, VIR_CONNECT_LIST_DOMAINS_RUNNING );
+	int domainCount = virConnectListAllDomains(conn, &activeDomains, VIR_CONNECT_LIST_DOMAINS_RUNNING);
 
-	if( prevUsedMem == NULL )
-		prevUsedMem = calloc( numDomains, sizeof( long long int ) );
+	long long int availableHostMemory = virNodeGetFreeMemory(conn) / 1024;  // in MB
 
-	long long int* ballonSizes = calloc( numDomains, sizeof( long long int ) );
-	long long int* memRequired = calloc( numDomains, sizeof( long long int ) );
-	long long int* memSurplus = calloc( numDomains, sizeof( long long int ) );
-	int allVmMaxed = 1;
+	// Arrays to store memory metrics for each VM
+	long long int* additionalMemoryNeeded = calloc(domainCount, sizeof(long long int));
+	long long int* excessMemory = calloc(domainCount, sizeof(long long int));
+	long long int* currentMemory = calloc(domainCount, sizeof(long long int));
 
-	for( size_t i = 0; i < numDomains; i++)
+	for (int i = 0; i < domainCount; i++) 
 	{
-		virDomainSetMemoryStatsPeriod( domains[i], interval, VIR_DOMAIN_AFFECT_LIVE );
-		virDomainGetInfo( domains[i], info );
-		virDomainMemoryStats( domains[i], memInfo, 14, 0 );
+		virDomainSetMemoryStatsPeriod(activeDomains[i], interval, VIR_DOMAIN_AFFECT_LIVE);
+		virDomainGetInfo(activeDomains[i], domainDetails);
+		virDomainMemoryStats(activeDomains[i], memoryStats, 14, 0);
 
-		long long int ballonSize, unUsedMem, usedMem;
-		for( size_t j = 0; j < 14; j++ )
+		long long int balloonMemory, unusedDomainMemory, activeDomainMemory;
+		for (int j = 0; j < 14; j++) 
 		{
-			if( memInfo[j].tag == VIR_DOMAIN_MEMORY_STAT_ACTUAL_BALLOON )
-				ballonSize = memInfo[j].val / 1024;		
+			if (memoryStats[j].tag == VIR_DOMAIN_MEMORY_STAT_ACTUAL_BALLOON) 
+				balloonMemory = memoryStats[j].val / 1024;
 
-			if( memInfo[j].tag == VIR_DOMAIN_MEMORY_STAT_UNUSED )
-				unUsedMem = memInfo[j].val / 1024;				
+			if (memoryStats[j].tag == VIR_DOMAIN_MEMORY_STAT_UNUSED) 
+				unusedDomainMemory = memoryStats[j].val / 1024;				
 		}
 
-		usedMem = ballonSize - unUsedMem;
+		activeDomainMemory = balloonMemory - unusedDomainMemory;
 
-		if( prevUsedMem[i] != 0 )
+		// Calculate additional memory needed/excess based on constraints
+		if (unusedDomainMemory < 200) 
+			additionalMemoryNeeded[i] = MIN(200 - unusedDomainMemory, domainDetails->maxMem / 1024 - balloonMemory);
+
+		if (unusedDomainMemory > 100) 
+			excessMemory[i] = MIN(50, unusedDomainMemory - 100);
+
+		currentMemory[i] = balloonMemory;
+	}
+
+	// Allocate or release memory for VMs
+	for (int i = 0; i < domainCount; i++) 
+	{
+		for (int j = 0; j < domainCount; j++) 
 		{
-			// A threshold of 10 mb to clear out noise
-			if( usedMem > prevUsedMem[i] + 10 && unUsedMem < 200  )
-				memRequired[i] = MIN( MAX( 200 - unUsedMem, 50 ), info->maxMem / 1024 - ballonSize );
-
-			else if( usedMem <= prevUsedMem[i] && unUsedMem > 100 )
+			if (i != j && additionalMemoryNeeded[i] > 0 && excessMemory[j] > 0) 
 			{
-				memSurplus[i] = MIN( 50, unUsedMem - 100 );
-				allVmMaxed = 0;
+				long long transferSize = MIN(additionalMemoryNeeded[i], excessMemory[j]);
+				virDomainSetMemory(activeDomains[i], (currentMemory[i] + transferSize) * 1024);
+				virDomainSetMemory(activeDomains[j], (currentMemory[j] - transferSize) * 1024);
+				additionalMemoryNeeded[i] -= transferSize;
+				excessMemory[j] -= transferSize;
 			}
 		}
 
-		ballonSizes[i] = ballonSize;
-		prevUsedMem[i] = usedMem;
-
-	}
-
-	size_t j = 0;
-
-	int noMemRequired = 0;
-
-	for( size_t i = 0; i < numDomains; i++ )
-	{
-		size_t takingVcpu = ( i + firstVcupu ) % numDomains;
-
-		if( memRequired[ takingVcpu ] != 0 )
+		if (additionalMemoryNeeded[i] > 0 && availableHostMemory > 200) 
 		{
-			if( allVmMaxed == 0 )
-			{
-				for( ; j < numDomains; j++ )
-				{
-					size_t givingVcpu = ( j + firstVcupu ) % numDomains;
-					if( memRequired[ takingVcpu ] != 0 && memSurplus[ givingVcpu ] != 0 )
-					{
-						long long int memTransfered = MIN( memSurplus[ givingVcpu ], memRequired[ takingVcpu ] );
-						virDomainSetMemory( domains[ givingVcpu ], ( ballonSizes[ givingVcpu] - memTransfered ) * 1024 );
-						virDomainSetMemory( domains[ takingVcpu ], ( ballonSizes[ takingVcpu ] + memTransfered ) * 1024 );
-						memRequired[ takingVcpu ] -= memTransfered;
-						memSurplus[ givingVcpu ] -= memTransfered;
-
-						if( memRequired[ takingVcpu ] == 0 )
-							break;
-					}
-				}
-			}
-			else
-			{
-				long long int freeMem = virNodeGetFreeMemory( conn )/1024;
-				if( freeMem > 200 )
-				{
-					long long int memTransfered = MIN( 50, MIN( memRequired[ takingVcpu ], freeMem - 200 ) );
-					virDomainSetMemory( domains[ takingVcpu ], ( ballonSizes[ takingVcpu ] + memTransfered ) * 1024 );
-					memRequired[ takingVcpu ] -= memTransfered;
-				}
-			}
-			noMemRequired = 1;
+			long long allocateSize = MIN(additionalMemoryNeeded[i], availableHostMemory - 200);
+			virDomainSetMemory(activeDomains[i], (currentMemory[i] + allocateSize) * 1024);
+			availableHostMemory -= allocateSize;
 		}
 	}
 
-	if( noMemRequired == 0 )
-	{
-		for( size_t i = 0; i < numDomains; i++ )
-		{
-			if( memSurplus[ i ]  > 0 )
-				virDomainSetMemory( domains[ i ], ( ballonSizes[ i ] - memSurplus[ i ] ) * 1024 );
-		}	
-	}
-
-	firstVcupu = ( firstVcupu + 1 ) % numDomains;
-	free(info);
-	free(memInfo);
-	free(ballonSizes);
-	free(memRequired);
-	free(memSurplus);
-
+	free(domainDetails);
+	free(memoryStats);
+	free(additionalMemoryNeeded);
+	free(excessMemory);
+	free(currentMemory);
+	free(activeDomains);
 }
