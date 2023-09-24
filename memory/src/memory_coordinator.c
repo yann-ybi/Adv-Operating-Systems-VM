@@ -9,9 +9,6 @@
 #define MIN(a,b) ((a)<(b)?a:b)
 #define MAX(a,b) ((a)>(b)?a:b)
 
-long long int *priorConsumedMem = NULL;
-size_t startingVM = 0;
-
 // encapsulate memory statistics for each virtual machine
 typedef struct {
     long long int allocatedMem;  // Total memory allocated to the VM
@@ -20,6 +17,8 @@ typedef struct {
 } VMStats;
 
 int is_exit = 0; // DO NOT MODIFY THE VARIABLE
+size_t startingVM = 0;
+long long int *priorConsumedMem = NULL;
 
 void MemoryScheduler(virConnectPtr conn,int interval);
 
